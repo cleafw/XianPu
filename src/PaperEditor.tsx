@@ -22,7 +22,7 @@ export function PaperEditor({ paper, inherited, onApply }: {
       <option value="a3">A3 · 297 × 420 mm</option>
       <option value="custom">{t('自定义尺寸')}</option>
     </select></label>
-    {size === 'custom' && <div className="inline">
+    {size === 'custom' && <div className="field-row">
       <label>{t('纸张宽度（mm）')}<input type="number" value={width} min={paperLimits.minWidth} max={paperLimits.maxWidth}
         step="any" onChange={(event) => setWidth(event.target.value)} /></label>
       <label>{t('纸张高度（mm）')}<input type="number" value={height} min={paperLimits.minHeight} max={paperLimits.maxHeight}

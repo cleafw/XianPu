@@ -170,12 +170,12 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         <button key={midi} onClick={() => putPitch(midi)}>{t(label)}</button>)}</div> : tab ? <>
         <div className="button-grid">{track.tuning.map((midi, index) =>
           <button key={index} aria-pressed={entry.string === index + 1} onClick={() => setEntry({ ...entry, string: index + 1 })}>{t('{string}弦', { string: index + 1 })}</button>)}</div>
-        <div className="inline"><input aria-label={t('品位')} inputMode="numeric" placeholder={t('0–36 品')} value={fret} maxLength={2} onChange={(e) => setFret(e.target.value)}
+        <div className="field-row"><input aria-label={t('品位')} inputMode="numeric" placeholder={t('0–36 品')} value={fret} maxLength={2} onChange={(e) => setFret(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) putFret(fret) }} />
           <button className="primary" onClick={() => putFret(fret)}>{t('加入')}</button></div>
         <small>{t('加入后可继续选择另一根弦，完成后点「下一拍」。')}</small>
       </> : <>
-        <div className="inline">
+        <div className="field-row">
           <label>{t('八度')}<select value={entry.octave} onChange={(e) => setEntry({ ...entry, octave: Number(e.target.value) })}>
             {[-2, -1, 0, 1, 2].map((octave) => <option key={octave} value={octave}>{octave > 0 ? '+' + octave : octave}</option>)}</select></label>
           <label>{t('变音')}<select value={entry.accidental ?? 'auto'} onChange={(e) => setEntry({ ...entry, accidental: e.target.value === 'auto' ? undefined : Number(e.target.value) })}>
@@ -247,7 +247,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
       }}>{t('应用和弦图')}</button></>}
       </ToolPanel>
       <ToolPanel label={t('倚音与成组连音')}>
-        {!percussion && <div className="inline small-gap">
+        {!percussion && <div className="field-row">
           <label>{t('倚音音高')}<select value={gracePitch ?? Math.min(127, (current?.midi ?? 60) + 2)}
             onChange={(event) => setGracePitch(Number(event.target.value))}>
             {Array.from({ length: 128 }, (_, midi) => <option value={midi} key={midi}>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</option>)}
@@ -263,7 +263,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
           <span>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</span>
           <button className="danger-action" onClick={() => edit((old) => ({ ...old, grace: old.grace?.filter((_, i) => i !== index) }))}>{t('移除倚音')}</button>
         </div>)}
-        <div className="inline small-gap">
+        <div className="field-row">
           <label>{t('连音个数')}<select value={ratio[0]} onChange={(event) => setRatio([Number(event.target.value), ratio[1]])}>
             {[2, 3, 4, 5, 6, 7, 8, 9].map((value) => <option key={value}>{value}</option>)}
           </select></label>

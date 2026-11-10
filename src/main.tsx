@@ -637,7 +637,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
             <button className="score-heading-details" onClick={() => setPanel('settings')} aria-label={t('编辑谱头')}>
               {keyNames[barSettings!.key + 7]} · {barSettings!.meter.join('/')} · ♩ = {barSettings!.bpm}{project.author ? ' · ' + project.author : ''}
             </button></div>
-            <div className="canvas-controls"><label>{t('谱式')}<select value={mode} onChange={(event) => selectMode(event.target.value as Mode)}>
+            <div className="field-row canvas-controls"><label>{t('谱式')}<select value={mode} onChange={(event) => selectMode(event.target.value as Mode)}>
               {Object.entries(modes).filter(([key]) => track?.kind === 'guitar'
                 ? key !== 'piano' && key !== 'percussion' : key !== 'tab' && key !== 'staff-tab')
                 .map(([key, value]) => <option key={key} value={key}>{t(value)}</option>)}</select></label>
@@ -757,7 +757,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         return <label key={field}>{t(label)}<input maxLength={200} value={project.credits?.[field] ?? ''}
           onChange={(event) => commit((score) => ({ ...score, credits: { ...score.credits, [field]: event.target.value } }))} /></label>
       })}
-      <div className="inline"><label>{t('调号')}<select value={project.key} onChange={(e) => commit((score) => ({ ...score, key: Number(e.target.value) }))}>
+      <div className="field-row"><label>{t('调号')}<select value={project.key} onChange={(e) => commit((score) => ({ ...score, key: Number(e.target.value) }))}>
         {keyNames.map((name, i) => <option key={name} value={i - 7}>{t('{name} 大调', { name })}</option>)}</select></label>
         <label>{t('拍号')}<select value={project.meter.join('/')} onChange={(e) => {
           const meter = e.target.value.split('/').map(Number) as [number, number]
@@ -768,7 +768,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       </div>
       <label>{t('弱起 · 首小节拍数')}<select value={project.pickup} onChange={(e) => commit((score) => ({ ...score, pickup: Number(e.target.value) }))}>
         <option value={0}>{t('无弱起')}</option>{Array.from({ length: project.meter[0] - 1 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}</select></label>
-      <fieldset><legend>{t('第 {bar} 小节的调号、拍号与速度', { bar: barIndex + 1 })}</legend><div className="inline small-gap">
+      <fieldset><legend>{t('第 {bar} 小节的调号、拍号与速度', { bar: barIndex + 1 })}</legend><div className="field-row">
         <label>{t('曲中调号')}<select value={project.measures[barIndex].key ?? ''} onChange={(event) =>
           patchMeasure({ key: event.target.value ? Number(event.target.value) : undefined })}>
           <option value="">{t('沿用前文')}</option>{keyNames.map((name, i) => <option key={name} value={i - 7}>{name}</option>)}
@@ -848,7 +848,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         }}>{Array.from({ length: 92 - (track.capo ?? 0) }, (_, n) => <option key={n} value={n}>{pitchNames[n % 12]}{Math.floor(n / 12) - 1}</option>)}</select></label>)}</div></>}
     </Modal>}
     {project && panel === 'export' && <Modal title={t('导出')} close={() => { if (!busy) setPanel(null) }} wide>
-      <div className="export-controls">
+      <div className="field-row export-controls">
       <label>{t('导出格式')}<select disabled={busy} value={exportFormat} onChange={(e) => setExportFormat(e.target.value as ExportFormat)}>
         <option value="pdf">{t('PDF 乐谱')}</option><option value="png">{t('PNG 图片')}</option>
       </select></label>

@@ -17,21 +17,26 @@ test('audition follows beats and repeated measures, scrolling into view without 
   const cursor = page.locator('.score-cursor')
   await expect(cursor).toBeVisible()
   await page.evaluate(() => {
-    const marker = document.querySelector('.score-cursor')!
+    const marker = document.querySelector<HTMLElement>('.score-cursor')!
     const points: string[] = []
+    const locations = new Set<string>()
     const read = () => {
       const bar = marker.getAttribute('data-play-measure')
       const beat = marker.getAttribute('data-play-beat')
       const point = bar + ':' + beat
       if (bar !== null && beat !== null && points.at(-1) !== point) points.push(point)
+      if (marker.classList.contains('is-playing') && !marker.hidden) {
+        locations.add(marker.style.left + ':' + marker.style.top)
+      }
     }
-    new MutationObserver(read).observe(marker, { attributes: true, attributeFilter: ['data-play-measure', 'data-play-beat'] })
-    Object.assign(window, { playheadPoints: points })
+    new MutationObserver(read).observe(marker, { attributes: true, attributeFilter: ['data-play-measure', 'data-play-beat', 'style'] })
+    Object.assign(window, { playheadPoints: points, playheadLocations: locations })
   })
   await page.getByRole('button', { name: '▶ 试听' }).click()
   await expect(cursor).toHaveClass(/is-playing/, { timeout: 20_000 })
   await expect.poll(() => page.evaluate(() => (window as Window & { playheadPoints?: string[] }).playheadPoints?.join(' ')),
     { timeout: 10_000 }).toContain('0:0 0:1 1:0 1:1 2:0 2:1 1:0 1:1 2:0')
+  await expect.poll(() => page.evaluate(() => (window as Window & { playheadLocations?: Set<string> }).playheadLocations?.size)).toBeGreaterThan(3)
   await expect.poll(() => page.locator('.canvas').evaluate((canvas) => canvas.scrollTop), { timeout: 8_000 }).toBeGreaterThan(150)
   await page.getByRole('button', { name: '■ 停止' }).click()
   await expect(cursor).not.toHaveClass(/is-playing/)
@@ -111,7 +116,9 @@ test('moves the entry position into a separate document and keeps the score and 
   await fourth.click({ button: 'right' })
   await expect(popup.getByRole('group', { name: '小节操作' })).toBeVisible()
   await entry.getByRole('button', { name: '将录入位置贴回底部' }).focus()
-  await popup.keyboard.press('Escape')
+  await popup.keyboard.down('Escape').catch((error) => {
+    if (!popup.isClosed()) throw error
+  })
   await expect(page.getByRole('button', { name: '弹出录入位置' })).toBeVisible()
   await expect(page.getByRole('group', { name: '小节操作' })).toHaveCount(0)
 })

@@ -9,7 +9,7 @@ export function SoundEditor({ tracks, onChange }: { tracks: Track[]; onChange: (
   const options = sounds.map(([program, zh, en]) => <option key={program} value={program}>{language === 'zh' ? zh : en}</option>)
   return <>
     <p>{t('音色只影响试听，谱面和音符保持原样。')}</p>
-    <div className="inline">
+    <div className="field-row">
       <label>{t('统一音色')}<select value={all} onChange={(event) => setAll(Number(event.target.value))}>{options}</select></label>
       <button onClick={() => onChange(all)}>{t('应用到所有声部')}</button>
     </div>

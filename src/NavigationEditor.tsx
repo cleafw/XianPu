@@ -24,7 +24,7 @@ export function NavigationEditor({ measures, index, apply }: {
   const measure = measures[index]
   const diagnostics = resolveScoreNavigation(measures).diagnostics
   return <fieldset><legend>{t('第 {bar} 小节的曲式与小节线', { bar: index + 1 })}</legend>
-    <div className="inline small-gap">
+    <div className="field-row">
       <label>{t('小节线')}<select value={measure.barline ?? ''} onChange={(event) =>
         apply({ barline: (event.target.value || undefined) as Measure['barline'] })}>
         <option value="">{t('普通小节线')}</option><option value="double">{t('双小节线')}</option><option value="final">{t('终止线')}</option>
@@ -32,7 +32,7 @@ export function NavigationEditor({ measures, index, apply }: {
       <label>{t('排练号')}<input maxLength={30} value={measure.rehearsal ?? ''} onChange={(event) =>
         apply({ rehearsal: event.target.value || undefined })} /></label>
     </div>
-    <div className="inline small-gap">
+    <div className="field-row">
       <label>{t('反复房子')}<select value={measure.ending?.number ?? 0} onChange={(event) => {
         const number = Number(event.target.value)
         apply({ ending: number === 1 || number === 2 ? { number, length: measure.ending?.length ?? 1 } : undefined })
