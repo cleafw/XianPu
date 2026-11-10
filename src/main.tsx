@@ -6,7 +6,7 @@ import { useEffect, useReducer, useRef, useState, type ChangeEvent, type MouseEv
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Editor } from './Editor'
 import { appName, displayMessage, languageKey, languageOf, LanguageContext, message, readLanguagePreference, translate, useLanguage,
-  type Language, type LanguagePreference, type Message, type Translate } from './i18n'
+  type Language, type LanguagePreference, type Message, type TextKey, type Translate } from './i18n'
 import { ScoreView } from './ScoreView'
 import { useMeasureDrag } from './useMeasureDrag'
 import type { SpanEnd } from './notationMarks'
@@ -22,6 +22,7 @@ import { beatList, beatRange, blank, changeBeat, createProject, createTrack, key
 import { playScore, stopPlayback } from './playback'
 import { copyMeasures, pasteMeasures, type MeasureClipboard, type PasteMode } from './measureClipboard'
 import * as storage from './storage'
+import { importMidi, maxMidiBytes } from './midiImport'
 import './styles.css'
 
 type History = { past: Project[]; value: Project | null; future: Project[] }
@@ -110,11 +111,14 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [pasteStructure, setPasteStructure] = useState(false)
   const [pasteWarning, setPasteWarning] = useState<{ text: string; apply: () => void } | null>(null)
   const [notice, setNotice] = useState<Message | null>(null)
+  const [midiWarnings, setMidiWarnings] = useState<TextKey[]>([])
   const [error, setError] = useState<Message | null>(null)
   const [playhead, setPlayhead] = useState<Position | null>(null)
   const [audioState, setAudioState] = useState<'idle' | 'loading' | 'playing'>('idle')
-  const [panel, setPanel] = useState<'settings' | 'export' | 'track' | 'paper' | 'sounds' | null>(null)
+  const [panel, setPanel] = useState<'settings' | 'export' | 'track' | 'paper' | 'sounds' | 'remove-part' | 'midi-report' | null>(null)
+  const [partToRemove, setPartToRemove] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<(() => void) | null>(null)
+  const pendingConfirmation = useRef<(() => void) | null>(null)
   const [exportMode, setExportMode] = useState<ExportMode>('current')
   const [exportFormat, setExportFormat] = useState<ExportFormat>('pdf')
   const [exportParts, setExportParts] = useState<string[]>([])
@@ -123,6 +127,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [previewPages, setPreviewPages] = useState(0)
   const [zoom, setZoom] = useState(100)
   const fileInput = useRef<HTMLInputElement>(null)
+  const openRequest = useRef(0)
+  const projectSession = useRef(0)
   const copied = useRef<MeasureClipboard | null>(null)
   const afterRender = useRef<{ resolve: (pages: HTMLElement[]) => void; reject: (reason: Error) => void } | null>(null)
   const jobId = useRef(0)
@@ -168,10 +174,13 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }, [project, dirty])
 
   function load(score: Project | null, filename: string | null = null, clean = false) {
+    openRequest.current++
+    projectSession.current++
     stopPlayback()
     setAudioState('idle')
     setError(null)
     setNotice(null)
+    setMidiWarnings([])
     setPanel(null)
     setPart(null)
     setPath(filename)
@@ -186,15 +195,18 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }
   async function persist(saveAs = false) {
     const current = activeRef.current
+    const session = projectSession.current
     if (!current.project) return false
     try {
       const data = JSON.stringify(current.project, null, 2)
+      let target = current.path
       if (storage.desktop) {
-        const target = !saveAs && current.path ? current.path : await storage.savePath(current.project.title, t)
+        target = !saveAs && current.path ? current.path : await storage.savePath(current.project.title, t)
         if (!target) return false
         await storage.writeFile(target, data)
-        setPath(target)
       } else storage.downloadProject(current.project.title, data, t)
+      if (projectSession.current !== session) return true
+      if (storage.desktop) setPath(target)
       setSaved(current.project)
       if (activeRef.current.project === current.project) {
         try { localStorage.removeItem(storage.recoveryKey) } catch { /* The file is already saved. */ }
@@ -203,38 +215,85 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       setNotice(message('工程已保存'))
       return true
     } catch (cause) {
-      setError(message('保存失败。', undefined, cause))
+      if (projectSession.current === session) setError(message('保存失败。', undefined, cause))
       return false
     }
   }
+  function setConfirmation(action: (() => void) | null) {
+    pendingConfirmation.current = action
+    setConfirm(() => action)
+  }
   function whenClean(action: () => void) {
-    if (activeRef.current.dirty) setConfirm(() => action)
+    if (activeRef.current.dirty) setConfirmation(action)
     else action()
   }
   function discard(action: () => void) {
     try { localStorage.removeItem(storage.recoveryKey) } catch { /* Storage can be unavailable. */ }
     setRecovery(null)
-    setConfirm(null)
+    setConfirmation(null)
     action()
   }
   async function openProject() {
-    if (!storage.desktop) { fileInput.current?.click(); return }
+    const request = ++openRequest.current
+    if (!storage.desktop) { pickBrowserFile('.xianpu'); return }
     try {
       const file = await storage.pickProject(t)
       if (typeof file !== 'string') return
       const score = parseProject(await storage.readFile(file))
-      whenClean(() => load(score, file, true))
-    } catch (cause) { setError(message('打开失败。', undefined, cause)) }
+      if (openRequest.current === request) whenClean(() => load(score, file, true))
+    } catch (cause) {
+      if (openRequest.current === request) setError(message('打开失败。', undefined, cause))
+    }
+  }
+  function pickBrowserFile(accept: string) {
+    const input = fileInput.current
+    if (!input) return
+    input.accept = accept
+    input.click()
+  }
+  function openMidi(bytes: Uint8Array, filename: string) {
+    const { project: score, noteCount, warnings } = importMidi(bytes, filename, language)
+    whenClean(() => {
+      load(score)
+      setNotice(message('已导入 MIDI · {tracks} 个乐器 · {bars} 小节 · {notes} 个音符。',
+        { tracks: score.tracks.length, bars: score.measures.length, notes: noteCount }))
+      setMidiWarnings(warnings)
+    })
+  }
+  async function pickMidi() {
+    const request = ++openRequest.current
+    if (!storage.desktop) { pickBrowserFile('.mid,.midi'); return }
+    try {
+      const file = await storage.pickMidi(t)
+      if (typeof file !== 'string' || openRequest.current !== request) return
+      const bytes = await storage.readMidi(file)
+      if (openRequest.current === request) openMidi(bytes, file)
+    } catch (cause) {
+      if (openRequest.current === request) setError(message('MIDI 导入失败。', undefined, cause))
+    }
   }
   async function fromBrowser(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0]
     event.currentTarget.value = ''
     if (!file) return
+    const request = ++openRequest.current
+    if (/\.midi?$/i.test(file.name) || event.currentTarget.accept === '.mid,.midi') {
+      try {
+        if (file.size > maxMidiBytes) throw new Error('MIDI 文件超过 16 MB。')
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        if (openRequest.current === request) openMidi(bytes, file.name)
+      } catch (cause) {
+        if (openRequest.current === request) setError(message('MIDI 导入失败。', undefined, cause))
+      }
+      return
+    }
     try {
       if (file.size > 16 * 1024 * 1024) throw new Error('项目文件超过 16 MB。')
       const score = parseProject(await file.text())
-      whenClean(() => load(score, null, true))
-    } catch (cause) { setError(message('打开失败。', undefined, cause)) }
+      if (openRequest.current === request) whenClean(() => load(score, null, true))
+    } catch (cause) {
+      if (openRequest.current === request) setError(message('打开失败。', undefined, cause))
+    }
   }
   useEffect(() => {
     if (!storage.desktop) return
@@ -245,7 +304,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       if (activeRef.current.busy) { event.preventDefault(); return }
       if (activeRef.current.dirty) {
         event.preventDefault()
-        setConfirm(() => () => { void windowHandle.destroy() })
+        setConfirmation(() => { void windowHandle.destroy() })
       }
     }).then((stop) => { if (disposed) stop(); else unlisten = stop })
     return () => { disposed = true; unlisten?.() }
@@ -312,6 +371,21 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     rangeAnchor.current = null
     setBarMenu(null)
     if (id) setSelection({ track: id, bar: barIndex, beat: 0, voice: id === position.track ? activeVoice : 0 })
+  }
+  function removePart(id: string) {
+    if (!project || project.tracks.length < 2) return
+    const index = project.tracks.findIndex((item) => item.id === id)
+    if (index < 0) return
+    const tracks = project.tracks.filter((item) => item.id !== id)
+    const next = tracks[Math.min(index, tracks.length - 1)].id
+    commit((score) => ({ ...score, tracks: score.tracks.filter((item) => item.id !== id) }))
+    if (activePart === id) selectView(next)
+    else if (selection.track === id) {
+      selectView(null)
+      setSelection({ track: next, bar: barIndex, beat: 0 })
+    }
+    setPanel(null)
+    setPartToRemove(null)
   }
   function selectBeat(target: Position) {
     setSelectedBars([])
@@ -568,6 +642,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }
 
   const visible = project?.tracks.filter((item) => !activePart || item.id === activePart) ?? []
+  const pendingPart = panel === 'remove-part' ? project?.tracks.find((item) => item.id === partToRemove) : undefined
   return <>
     <input ref={fileInput} type="file" accept=".xianpu" hidden onChange={fromBrowser} />
     <div className="app-shell">
@@ -584,6 +659,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         <div className="toolbar" aria-label={t('主工具栏')}>
           {project && <button onClick={() => whenClean(() => load(null))}>{t('新建')}</button>}
           <button disabled={!!recovery && !project} onClick={() => void openProject()}>{t('打开')}</button>
+          <button disabled={!!recovery && !project} onClick={() => void pickMidi()}>{t('导入 MIDI')}</button>
           {project && <><button onClick={() => void persist()}>{t('保存')}{dirty ? ' •' : ''}</button><button onClick={() => void persist(true)}>{t('另存为')}</button>
           <span className="toolbar-rule" /><button disabled={!state.past.length} onClick={() => dispatch({ type: 'undo' })}>{t('撤销')}</button>
           <button disabled={!state.future.length} onClick={() => dispatch({ type: 'redo' })}>{t('重做')}</button></>}
@@ -605,25 +681,33 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         <div className="templates">{templates.map((template) => <button key={template.id} className="template" disabled={!!recovery} onClick={() => startProject(template.id)}>
           <span className="notation">{template.notation}</span><strong>{t(template.title)}</strong><span>{t(template.description)}</span><span className="template-action">{t('新建乐谱')} ↗</span>
         </button>)}</div>
-        <div className="demo-callout"><div><strong>{t('打开一份已经写好的谱')}</strong><p>{t('8 小节，包含人声、吉他与五线谱乐器。')}</p></div>
+        <div className="demo-callout"><div><strong>{t('打开一份已经写好的谱')}</strong><p>{t('8 小节，包含简谱、吉他六线谱与五线谱。')}</p></div>
           <button disabled={!!recovery} onClick={() => startProject('demo')}>{t('打开弹唱示例')}</button></div>
       </main> : <main className="workspace">
-        <nav className="sidebar" aria-label={t('总谱与乐器')}>
+        <nav className="sidebar" aria-label={t('总谱与分谱')}>
           <span className="eyebrow">{t('曲谱视图')}</span>
           <button aria-label={t('总谱')} aria-current={!activePart ? 'page' : undefined} onClick={() => selectView(null)}><span aria-hidden="true">▤</span> {t('总谱')}</button>
-          <div className="sidebar-caption">{t('乐器分谱')}</div>
-          {project.tracks.map((item) => <button key={item.id} aria-label={item.name} aria-current={activePart === item.id ? 'page' : undefined} onClick={() => selectView(item.id)}>
-            <span>{item.kind === 'voice' ? '♪' : item.kind === 'guitar' ? '≋' : '♩'}</span><span>{item.name}</span></button>)}
-          <details><summary>＋ {t('添加乐器')}</summary><div className="add-list">{(['voice', 'guitar', 'instrument'] as Kind[]).map((kind, index) =>
+          <div className="sidebar-caption">{t('分谱')}</div>
+          {project.tracks.map((item) => <div className="part-row" key={item.id}>
+            <button aria-label={item.name} aria-current={activePart === item.id ? 'page' : undefined} onClick={() => selectView(item.id)}>
+              <span aria-hidden="true">{item.kind === 'voice' ? '♪' : item.kind === 'guitar' ? '≋' : '♩'}</span><span>{item.name}</span>
+            </button>
+            <button className="part-remove" disabled={project.tracks.length < 2}
+              aria-label={t('删除分谱 {name}', { name: item.name })}
+              title={project.tracks.length < 2 ? t('至少保留一份分谱。') : t('删除分谱 {name}', { name: item.name })}
+              onClick={() => { setPartToRemove(item.id); setPanel('remove-part') }}>×</button>
+          </div>)}
+          <details><summary>＋ {t('添加分谱')}</summary><div className="add-list">{(Object.keys(kinds) as Kind[]).map((kind) =>
             <button key={kind} disabled={project.tracks.length >= 24} onClick={(event) => {
-              const added = createTrack(project, kind, t(kinds[kind]))
-              const count = project.tracks.filter((item) => item.kind === kind).length
-              if (count) added.name += ' ' + (count + 1)
+              const base = t(kinds[kind])
+              let name = base
+              for (let number = 2; project.tracks.some((item) => item.name === name); number++) name = base + ' ' + number
+              const added = createTrack(project, kind, name)
               commit((score) => ({ ...score, tracks: [...score.tracks, added] }))
               setSelection({ track: added.id, bar: barIndex, beat: 0 })
               setPart(added.id)
               event.currentTarget.closest('details')?.removeAttribute('open')
-            }}>{t((['人声简谱', '吉他六线谱', '五线谱乐器'] as const)[index])}</button>)}</div></details>
+            }}>{t(kinds[kind])}</button>)}</div></details>
           <div className="sidebar-foot">
             <button onClick={() => setPanel('settings')}>{t('曲谱设置')}</button>
             <button onClick={() => setPanel('track')}>{t('乐器设置')}</button>
@@ -719,7 +803,11 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         {(panel || confirm || pasteWarning || barMenu) && <div className="inspector inspector-placeholder" aria-hidden="true" />}
       </main>}
       <footer className="status-bar"><span>{project ? (dirty ? '● ' + t('未保存') : '✓ ' + t('已保存')) : t('叶子弦谱 · 本地工作区')}</span>
-        <span role="status">{audioState === 'loading' ? t('正在载入音色…') : notice ? displayMessage(t, notice) : t(project ? '乐谱与草稿保存在本机' : '选择模板，或打开已有工程')}</span></footer>
+        <div className="status-notice">
+          <span role="status">{audioState === 'loading' ? t('正在载入音色…') : notice ? displayMessage(t, notice) : t(project ? '乐谱与草稿保存在本机' : '选择模板，或打开已有工程')}</span>
+          {!!midiWarnings.length && <button onClick={() => setPanel('midi-report')}>{t('MIDI 导入详情')}</button>}
+        </div>
+      </footer>
       {error && panel !== 'export' && <div role="alert" className="toast"><span>{displayMessage(t, error)}</span><button aria-label={t('关闭提示')} onClick={() => setError(null)}>×</button></div>}
     </div>
     {barMenu && createPortal(<div className="bar-menu-layer" onPointerDown={() => setBarMenu(null)} onKeyDown={(event) => { if (event.key === 'Escape') setBarMenu(null) }}>
@@ -733,6 +821,13 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         {copied.current?.all && !activePart && <label className="checkbox"><input type="checkbox" checked={pasteStructure} onChange={(event) => setPasteStructure(event.target.checked)} />{t('包含结构记号')}</label>}
       </div>
     </div>, barMenu.document.body)}
+    {pendingPart && <Modal title={t('删除分谱')} close={() => { setPanel(null); setPartToRemove(null) }}>
+      <p>{t('删除「{name}」后，总谱也会移除此分谱及其内容。此操作可以撤销。', { name: pendingPart.name })}</p>
+      <div className="tool-actions">
+        <button autoFocus onClick={() => { setPanel(null); setPartToRemove(null) }}>{t('取消')}</button>
+        <button className="danger-action" onClick={() => removePart(pendingPart.id)}>{t('删除分谱')}</button>
+      </div>
+    </Modal>}
     {pasteWarning && <Modal title={t('确认粘贴')} close={() => setPasteWarning(null)}>
       <p>{pasteWarning.text}</p>
       <div className="inline"><button className="primary" onClick={() => { setPasteWarning(null); pasteWarning.apply() }}>{t('继续粘贴')}</button>
@@ -866,10 +961,13 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       {error && <p className="inline-error" role="alert">{displayMessage(t, error)}</p>}<div className="preview-label">{t(previewPaper?.size === 'a3' ? 'A3 预览' : previewPaper?.size === 'custom' ? '自定义纸张预览' : 'A4 预览')} · {scoreName(project, previewPart, t)}{exportMode === 'parts' ? t('（预览第一份）') : ''}</div>
       <div className="preview-scroll"><PrintSheet key={exportMode + ":" + previewPart} project={project} part={previewPart} onReady={(pages) => setPreviewPages(pages.length)} onError={(cause) => setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause))} /></div>
     </Modal>}
-    {confirm && <Modal title={t('保存当前工程？')} close={() => setConfirm(null)}>
+    {panel === 'midi-report' && <Modal title={t('MIDI 导入详情')} close={() => setPanel(null)}>
+      <ul>{midiWarnings.map((key) => <li key={key}>{t(key)}</li>)}</ul>
+    </Modal>}
+    {confirm && <Modal title={t('保存当前工程？')} close={() => setConfirmation(null)}>
       <p>{t('当前工程有未保存的改动。')}</p><div className="inline"><button className="primary" onClick={async () => {
-        if (await persist()) { setConfirm(null); confirm() }
-      }}>{t('保存并继续')}</button><button onClick={() => discard(confirm)}>{t('放弃改动')}</button><button onClick={() => setConfirm(null)}>{t('取消')}</button></div>
+        if (await persist() && pendingConfirmation.current === confirm) { setConfirmation(null); confirm() }
+      }}>{t('保存并继续')}</button><button onClick={() => discard(confirm)}>{t('放弃改动')}</button><button onClick={() => setConfirmation(null)}>{t('取消')}</button></div>
     </Modal>}
     {(printJob || (!storage.desktop && project && panel === 'export' && exportFormat === 'pdf')) && <div className="print-only" aria-hidden="true">
       <style>{'@page { size: ' + printDimensions.width + 'mm ' + printDimensions.height + 'mm; margin: ' + paperMargin + 'mm; }'}</style>

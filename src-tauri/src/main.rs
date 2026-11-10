@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{io::Write, path::{Path, PathBuf}};
+use std::{io::{Read, Write}, path::{Path, PathBuf}};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, webview::NewWindowResponse};
 
 fn io_error(error: impl std::fmt::Display) -> String {
@@ -13,6 +13,23 @@ fn read_project(path: PathBuf) -> Result<String, String> {
         return Err("项目文件超过 16 MB".into());
     }
     std::fs::read_to_string(path).map_err(io_error)
+}
+
+#[tauri::command]
+async fn read_midi(path: PathBuf) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        const LIMIT: u64 = 16 * 1024 * 1024;
+        let file = std::fs::File::open(path).map_err(io_error)?;
+        if file.metadata().map_err(io_error)?.len() > LIMIT {
+            return Err("MIDI 文件超过 16 MB。".into());
+        }
+        let mut bytes = Vec::new();
+        file.take(LIMIT + 1).read_to_end(&mut bytes).map_err(io_error)?;
+        if bytes.len() as u64 > LIMIT {
+            return Err("MIDI 文件超过 16 MB。".into());
+        }
+        Ok(tauri::ipc::Response::new(bytes))
+    }).await.map_err(io_error)?
 }
 
 #[tauri::command]
@@ -154,7 +171,7 @@ fn main() {
                 .build()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![read_project, write_project, export_pdf, write_png, system_language, open_creator_page])
+        .invoke_handler(tauri::generate_handler![read_project, read_midi, write_project, export_pdf, write_png, system_language, open_creator_page])
         .run(tauri::generate_context!())
         .expect("could not start Yezi XianPu");
 }

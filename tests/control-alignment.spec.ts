@@ -26,7 +26,7 @@ test('aligns fields with their actions in dialogs, docked panels and floating pa
   await expectAligned(ornaments.getByLabel('倚音音高'), ornaments.getByRole('button', { name: '添加前倚音' }))
   await ornaments.getByRole('button', { name: '将倚音与成组连音贴回右栏' }).click()
 
-  await page.getByRole('navigation').getByRole('button', { name: '吉他', exact: true }).click()
+  await page.getByRole('navigation').getByRole('button', { name: '吉他六线谱', exact: true }).click()
   await expectAligned(inspector.getByRole('textbox', { name: '品位' }), inspector.getByRole('button', { name: '加入', exact: true }))
 
   await page.getByRole('button', { name: '导出', exact: true }).click()

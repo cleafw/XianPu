@@ -145,8 +145,9 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
     }
     return listenWorkspaceKeys(keyDown)
   })
+  const notation = t(percussion ? '打击乐谱' : tab ? '吉他六线谱' : staff ? '五线谱' : '简谱')
   return <section className="inspector editor" hidden={suspended} aria-label={t('录入面板')}>
-    <div className="inspector-head"><span className="eyebrow">{t('当前录入')}</span><strong>{track.name} · {t(percussion ? '打击乐谱' : tab ? '六线谱' : staff ? '五线谱' : '简谱')}</strong><small>{t('第 {bar} 小节 · 位置 {beat}', { bar: position.bar + 1, beat: position.beat + 1 })}</small></div>
+    <div className="inspector-head"><span className="eyebrow">{t('当前录入')}</span><strong>{track.name === notation ? notation : track.name + ' · ' + notation}</strong><small>{t('第 {bar} 小节 · 位置 {beat}', { bar: position.bar + 1, beat: position.beat + 1 })}</small></div>
     <div className="inspector-body">
       <ToolPanel label={t('时值')} initialOpen hint={t('{beats} 拍', { beats: new Intl.NumberFormat(language, { maximumFractionDigits: 2 })
         .format(ticks({ ...blank(), ...rhythm, tuplet: beat.tuplet }) / (3840 / measureSettings(score, position.bar).meter[1])) })}>

@@ -42,7 +42,7 @@ export type Project = {
 }
 export type Position = { track: string; bar: number; beat: number; lane?: 'staff' | 'tab' | 'numbered'; voice?: number; note?: number; string?: number }
 export const modes = { numbered: '简谱', tab: '吉他六线谱', staff: '五线谱', 'staff-tab': '五线谱＋六线谱', 'staff-numbered': '五线谱＋简谱', piano: '钢琴大谱表', percussion: '打击乐谱' } as const
-export const kinds = { voice: '人声', guitar: '吉他', instrument: '五线谱乐器' } as const
+export const kinds = { voice: modes.numbered, guitar: modes.tab, instrument: modes.staff } as const
 export const guitarTuning = [64, 59, 55, 50, 45, 40]
 export const durations: Duration[] = [1, 2, 4, 8, 16, 32, 64]
 export const keyNames = ['C♭', 'G♭', 'D♭', 'A♭', 'E♭', 'B♭', 'F', 'C', 'G', 'D', 'A', 'E', 'B', 'F♯', 'C♯']

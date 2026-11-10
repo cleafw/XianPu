@@ -22,7 +22,7 @@
   "tracks": [
     {
       "id": "41c1e2b4-1bb5-4821-9e99-b91ffcdbbef4",
-      "name": "人声",
+      "name": "简谱",
       "kind": "voice",
       "mode": "numbered",
       "tuning": [],
@@ -442,7 +442,7 @@
     },
     {
       "id": "87da9795-dff3-4f4f-917b-1adad376dddb",
-      "name": "吉他",
+      "name": "吉他六线谱",
       "kind": "guitar",
       "mode": "tab",
       "tuning": [
@@ -1046,7 +1046,7 @@
     },
     {
       "id": "9ab567e8-41bf-4fb5-8f83-713cd8ac3da1",
-      "name": "五线谱乐器",
+      "name": "五线谱",
       "kind": "instrument",
       "mode": "staff",
       "tuning": [],
