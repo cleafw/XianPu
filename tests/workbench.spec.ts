@@ -1,0 +1,83 @@
+import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import { parseProject } from '../src/model'
+
+test('creates an eight-measure score with lyrics, chord, fret and staff entries and reopens it', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: /简谱弹唱/ }).click()
+  await expect(page.locator('.score-render svg').first()).toBeVisible()
+  await page.keyboard.type('1230')
+  await page.getByRole('button', { name: /^第 1 小节/ }).click()
+  await page.getByRole('button', { name: '人声位置 1' }).click()
+  await page.getByRole('button', { name: '八分', exact: true }).click()
+  await page.getByRole('button', { name: '附点', exact: true }).click()
+  await page.getByLabel('歌词', { exact: true }).fill('晚风')
+  await page.getByLabel('和弦名', { exact: true }).fill('Am')
+  for (let bar = 2; bar <= 8; bar++) {
+    if (bar > 4) await page.getByRole('button', { name: '插入小节' }).click()
+    else await page.getByRole('region', { name: '小节与录入位置' }).getByRole('button', { name: new RegExp('^第 ' + bar + ' 小节') }).click()
+    await page.keyboard.type('5360')
+  }
+  await page.getByRole('navigation').getByText('吉他', { exact: true }).click()
+  for (const [string, fret] of [[1, 0], [2, 1], [3, 2]]) {
+    await page.getByRole('button', { name: string + '弦', exact: true }).click()
+    await page.getByLabel('品位', { exact: true }).fill(String(fret))
+    await page.getByRole('button', { name: '加入', exact: true }).click()
+  }
+  await page.getByText('＋ 添加乐器', { exact: true }).click()
+  await page.getByRole('button', { name: '五线谱乐器', exact: true }).click()
+  await page.getByRole('button', { name: '录入 E4', exact: true }).click()
+  await page.getByLabel('每行小节').selectOption('2')
+  await page.getByRole('navigation').getByRole('button', { name: '总谱', exact: true }).click()
+  await expect(page.getByLabel('每行小节')).toHaveValue('4')
+  const downloaded = page.waitForEvent('download')
+  await page.getByRole('button', { name: '保存 •' }).click()
+  const file = await downloaded
+  const path = (await file.path())!
+  const score = parseProject(await readFile(path, 'utf8'))
+  expect(score.measures).toHaveLength(8)
+  expect(score.tracks[0].bars[0][0].lyric).toBe('晚风')
+  expect(score.tracks[0].bars[0][0].dots).toBe(1)
+  expect(score.tracks[0].bars[0][0].chord).toBe('Am')
+  expect(score.tracks[1].bars.flat().some((beat) => beat.notes.length === 3)).toBe(true)
+  expect(score.tracks[2].bars.flat().some((beat) => beat.notes[0]?.midi === 64)).toBe(true)
+  await page.locator('input[type=file]').setInputFiles({ name: 'song.xianpu', mimeType: 'application/json', buffer: await readFile(path) })
+  await expect(page.getByText('✓ 已保存')).toBeVisible()
+  await expect(page.getByRole('navigation').getByRole('button', { name: '五线谱乐器', exact: true })).toBeVisible()
+})
+
+test('renders the mixed demo, updates the shared score and previews independent parts', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await expect(page.locator('.canvas .score-render')).toContainText('五线谱乐器')
+  await expect(page.locator('.canvas .score-render')).toContainText('吉他')
+  await expect(page.locator('.canvas .score-render')).toContainText('晚')
+  await page.getByRole('navigation').getByText('人声', { exact: true }).click()
+  await page.getByRole('button', { name: '录入简谱 7' }).click()
+  await page.getByRole('navigation').getByRole('button', { name: '总谱', exact: true }).click()
+  await expect(page.getByRole('button', { name: '人声位置 1' })).toContainText('B')
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(page.getByRole('button', { name: '人声位置 1' })).toContainText('C')
+  await page.getByRole('button', { name: '导出 PDF' }).click()
+  await page.getByLabel('导出范围').selectOption('parts')
+  await page.getByRole('checkbox', { name: '人声' }).uncheck()
+  await expect(page.getByText('A4 预览 · 吉他（预览第一份）')).toBeVisible()
+  await expect(page.getByRole('button', { name: '选择保存位置' })).toBeEnabled()
+  await expect(page.getByRole('dialog').locator('.print-page')).toHaveCount(1)
+  await expect(page.getByRole('dialog').locator('.print-page')).toContainText('吉他')
+  const family = await page.getByRole('dialog').locator('.print-page g.at text').first().evaluate((node) => getComputedStyle(node).fontFamily)
+  expect(family).toMatch(/alphaTab/)
+  await expect(page.getByRole('dialog').locator('.print-page')).not.toContainText('五线谱乐器')
+})
+
+test('recovers a draft and keeps it when a corrupted project is opened', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: /简谱弹唱/ }).click()
+  await page.keyboard.type('12')
+  await page.reload()
+  await page.getByRole('button', { name: '恢复草稿' }).click()
+  await expect(page.getByRole('button', { name: '人声位置 2' })).toContainText('D')
+  await page.locator('input[type=file]').setInputFiles({ name: 'broken.xianpu', mimeType: 'application/json', buffer: Buffer.from('{"version":99}') })
+  await expect(page.getByRole('alert')).toContainText('打开失败')
+  await expect(page.getByRole('button', { name: '人声位置 2' })).toContainText('D')
+})

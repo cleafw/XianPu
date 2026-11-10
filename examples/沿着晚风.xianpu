@@ -1,0 +1,1257 @@
+{
+  "version": 1,
+  "title": "沿着晚风",
+  "author": "弦谱示例",
+  "bpm": 90,
+  "key": 0,
+  "meter": [
+    4,
+    4
+  ],
+  "pickup": 0,
+  "measures": [
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {}
+  ],
+  "tracks": [
+    {
+      "id": "41c1e2b4-1bb5-4821-9e99-b91ffcdbbef4",
+      "name": "人声",
+      "kind": "voice",
+      "mode": "numbered",
+      "tuning": [],
+      "bars": [
+        [
+          {
+            "duration": 8,
+            "dots": 1,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "lyric": "晚",
+            "chord": "C"
+          },
+          {
+            "duration": 16,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 62
+              }
+            ],
+            "draft": false,
+            "lyric": "风"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 64
+              }
+            ],
+            "draft": false,
+            "lyric": "轻"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 67
+              }
+            ],
+            "draft": false,
+            "lyric": "轻"
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 69
+              }
+            ],
+            "draft": false,
+            "lyric": "穿",
+            "chord": "Am"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 67
+              }
+            ],
+            "draft": false,
+            "lyric": "过"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 64
+              }
+            ],
+            "draft": false,
+            "lyric": "街"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 62
+              }
+            ],
+            "draft": false,
+            "lyric": "角"
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "lyric": "我",
+            "chord": "C"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 64
+              }
+            ],
+            "draft": false,
+            "lyric": "把"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 67
+              }
+            ],
+            "draft": false,
+            "lyric": "这"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 69
+              }
+            ],
+            "draft": false,
+            "lyric": "首"
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 67
+              }
+            ],
+            "draft": false,
+            "lyric": "歌",
+            "chord": "G"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 64
+              }
+            ],
+            "draft": false,
+            "lyric": "留"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 62
+              }
+            ],
+            "draft": false,
+            "lyric": "给"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "lyric": "你"
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 64
+              }
+            ],
+            "draft": false,
+            "lyric": "抬",
+            "chord": "F"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 65
+              }
+            ],
+            "draft": false,
+            "lyric": "头"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 67
+              }
+            ],
+            "draft": false,
+            "lyric": "看"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 69
+              }
+            ],
+            "draft": false,
+            "lyric": "看"
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 72
+              }
+            ],
+            "draft": false,
+            "lyric": "漫",
+            "chord": "Am"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 69
+              }
+            ],
+            "draft": false,
+            "lyric": "天"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 67
+              }
+            ],
+            "draft": false,
+            "lyric": "星"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 64
+              }
+            ],
+            "draft": false,
+            "lyric": "光"
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 62
+              }
+            ],
+            "draft": false,
+            "lyric": "听",
+            "chord": "G"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 65
+              }
+            ],
+            "draft": false,
+            "lyric": "见"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 64
+              }
+            ],
+            "draft": false,
+            "lyric": "回"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 62
+              }
+            ],
+            "draft": false,
+            "lyric": "响"
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "C"
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 64
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ]
+      ],
+      "layout": {
+        "barsPerLine": 4,
+        "systemsPerPage": 3
+      }
+    },
+    {
+      "id": "87da9795-dff3-4f4f-917b-1adad376dddb",
+      "name": "吉他",
+      "kind": "guitar",
+      "mode": "tab",
+      "tuning": [
+        64,
+        59,
+        55,
+        50,
+        45,
+        40
+      ],
+      "bars": [
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 5,
+                "fret": 3,
+                "midi": 48
+              },
+              {
+                "string": 3,
+                "fret": 0,
+                "midi": 55
+              },
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "C",
+            "diagram": [
+              0,
+              1,
+              0,
+              2,
+              3,
+              -1
+            ]
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 4,
+                "fret": 2,
+                "midi": 52
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 3,
+                "fret": 0,
+                "midi": 55
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 5,
+                "fret": 0,
+                "midi": 45
+              },
+              {
+                "string": 3,
+                "fret": 2,
+                "midi": 57
+              },
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "Am",
+            "diagram": [
+              0,
+              1,
+              2,
+              2,
+              0,
+              -1
+            ]
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 4,
+                "fret": 2,
+                "midi": 52
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 3,
+                "fret": 2,
+                "midi": 57
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 5,
+                "fret": 3,
+                "midi": 48
+              },
+              {
+                "string": 3,
+                "fret": 0,
+                "midi": 55
+              },
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "C",
+            "diagram": [
+              0,
+              1,
+              0,
+              2,
+              3,
+              -1
+            ]
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 4,
+                "fret": 2,
+                "midi": 52
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 3,
+                "fret": 0,
+                "midi": 55
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 5,
+                "fret": 0,
+                "midi": 45
+              },
+              {
+                "string": 3,
+                "fret": 2,
+                "midi": 57
+              },
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "Am",
+            "diagram": [
+              0,
+              1,
+              2,
+              2,
+              0,
+              -1
+            ]
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 4,
+                "fret": 2,
+                "midi": 52
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 3,
+                "fret": 2,
+                "midi": 57
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 5,
+                "fret": 3,
+                "midi": 48
+              },
+              {
+                "string": 3,
+                "fret": 0,
+                "midi": 55
+              },
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "C",
+            "diagram": [
+              0,
+              1,
+              0,
+              2,
+              3,
+              -1
+            ]
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 4,
+                "fret": 2,
+                "midi": 52
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 3,
+                "fret": 0,
+                "midi": 55
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 5,
+                "fret": 0,
+                "midi": 45
+              },
+              {
+                "string": 3,
+                "fret": 2,
+                "midi": 57
+              },
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "Am",
+            "diagram": [
+              0,
+              1,
+              2,
+              2,
+              0,
+              -1
+            ]
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 4,
+                "fret": 2,
+                "midi": 52
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 3,
+                "fret": 2,
+                "midi": 57
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 5,
+                "fret": 3,
+                "midi": 48
+              },
+              {
+                "string": 3,
+                "fret": 0,
+                "midi": 55
+              },
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "C",
+            "diagram": [
+              0,
+              1,
+              0,
+              2,
+              3,
+              -1
+            ]
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 4,
+                "fret": 2,
+                "midi": 52
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 3,
+                "fret": 0,
+                "midi": 55
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 5,
+                "fret": 0,
+                "midi": 45
+              },
+              {
+                "string": 3,
+                "fret": 2,
+                "midi": 57
+              },
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false,
+            "chord": "Am",
+            "diagram": [
+              0,
+              1,
+              2,
+              2,
+              0,
+              -1
+            ]
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 4,
+                "fret": 2,
+                "midi": 52
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 3,
+                "fret": 2,
+                "midi": 57
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 4,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "string": 2,
+                "fret": 1,
+                "midi": 60
+              }
+            ],
+            "draft": false
+          }
+        ]
+      ],
+      "layout": {
+        "barsPerLine": 4,
+        "systemsPerPage": 3
+      }
+    },
+    {
+      "id": "9ab567e8-41bf-4fb5-8f83-713cd8ac3da1",
+      "name": "五线谱乐器",
+      "kind": "instrument",
+      "mode": "staff",
+      "tuning": [],
+      "bars": [
+        [
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 72
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 76
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 81
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 76
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 72
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 79
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 79
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 74
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 76
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 79
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 84
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 79
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 74
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 76
+              }
+            ],
+            "draft": false
+          }
+        ],
+        [
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 72
+              }
+            ],
+            "draft": false
+          },
+          {
+            "duration": 2,
+            "dots": 0,
+            "triplet": false,
+            "notes": [
+              {
+                "midi": 74
+              }
+            ],
+            "draft": false
+          }
+        ]
+      ],
+      "layout": {
+        "barsPerLine": 4,
+        "systemsPerPage": 3
+      }
+    }
+  ],
+  "layout": {
+    "barsPerLine": 4,
+    "systemsPerPage": 3
+  }
+}
