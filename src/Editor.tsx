@@ -19,6 +19,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
   const [fret, setFret] = useState('')
   const [diagram, setDiagram] = useState('')
   const [wholeChord, setWholeChord] = useState(false)
+  const [stackNotes, setStackNotes] = useState(false)
   const [verse, setVerse] = useState(0)
   const [gracePitch, setGracePitch] = useState<number | null>(null)
   const [tupletStart, setTupletStart] = useState<Position | null>(null)
@@ -35,7 +36,9 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
   const base = clef === 'bass' ? 48 : 60
   const previousEntry = previousBeat(score, track, position)
   const validTie = !!previousEntry?.notes.some((note) => beat.notes.some((target) => matchingTie(note, target)))
-  const current = guitar ? beat.notes.find((tone) => tone.string === entry.string) ?? beat.notes[0] : beat.notes[position.note ?? 0] ?? beat.notes[0]
+  const current = guitar && mode !== 'numbered' ? beat.notes.find((tone) => tone.string === entry.string) ?? beat.notes[0]
+    : beat.notes[position.note ?? 0] ?? beat.notes[0]
+  const addToBeat = mode === 'numbered' && stackNotes
   const octaveOf = (midi: number) => Math.floor((midi + transposition - (staff ? base : tonic(keySignature))) / 12)
   const selectedKey = position.track + '/' + (position.voice ?? 0) + '/' + position.bar + '/' + position.beat
   const previousKey = useRef('')
@@ -65,14 +68,20 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
   }
   function putPitch(midi: number) {
     if (midi < 0 || midi > 127) { setError('音高超出可记谱范围。'); return }
+    if (addToBeat && beat.notes.some((note) => note.midi === midi)) return
+    if (addToBeat && beat.notes.length >= 16) { setError('同一拍最多可叠放 16 个音。'); return }
+    let tone: Beat['notes'][number] = { midi }
     if (guitar) {
       const candidates = track.tuning.map((pitch, index) => ({ string: index + 1, fret: midi - pitch }))
         .filter((candidate) => candidate.fret >= 0 && candidate.fret <= 36)
         .sort((a, b) => a.fret - b.fret)
-      if (!candidates.length) { setError('当前定弦无法弹出这个音。'); return }
-      edit((old) => ({ ...old, ...rhythm, draft: false, notes: [{ midi, ...candidates[0] }] }))
-    } else edit((old) => ({ ...old, ...rhythm, draft: false, notes: [{ midi }] }))
-    next()
+      const available = candidates.find(({ string }) => !addToBeat || !beat.notes.some((note) => note.string === string))
+      if (!available) { setError('当前定弦无法弹出这个音。'); return }
+      tone = { midi, ...available }
+    }
+    setError('')
+    edit((old) => ({ ...old, ...rhythm, draft: false, notes: addToBeat ? [...old.notes, tone] : [tone] }))
+    if (!addToBeat) next()
   }
   function rest() {
     edit((old) => ({ ...old, ...rhythm, notes: [], draft: false, tie: false, slur: false, lyric: undefined, verses: undefined, grace: undefined }))
@@ -166,6 +175,10 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
       </div>
       </ToolPanel>
       <ToolPanel label={t(tab ? '弦号与品位' : '音高')} initialOpen>
+      {mode === 'numbered' && <>
+        <button aria-pressed={stackNotes} onClick={() => setStackNotes(!stackNotes)}>{t('同拍叠音')}</button>
+        {stackNotes && <small>{t('依次录入同拍的音，完成后点「下一拍」。')}</small>}
+      </>}
       {percussion ? <div className="button-grid">{([['底鼓', 36], ['军鼓', 38], ['闭合踩镲', 42], ['开放踩镲', 46],
         ['嗵鼓', 47], ['吊镲', 49], ['叮叮镲', 51]] as const).map(([label, midi]) =>
         <button key={midi} onClick={() => putPitch(midi)}>{t(label)}</button>)}</div> : tab ? <>
@@ -208,6 +221,8 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         <button onClick={previous}>{t('上一拍')}</button><button onClick={next}>{t('下一拍')}</button>
       </div>
       <div className="tool-actions tool-actions-danger" role="group" aria-label={t('移除操作')}>
+        {mode === 'numbered' && current && beat.notes.length > 1 &&
+          <button onClick={() => edit((old) => ({ ...old, notes: old.notes.filter((note) => note !== current) }))}>{t('移除所选音')}</button>}
         <button disabled={!!beat.draft} onClick={() => edit(() => blank())}>{t('清空')}</button>
       </div>
       </ToolPanel>

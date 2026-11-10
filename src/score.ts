@@ -4,6 +4,7 @@ import { engraveMarks, reserveMarkSpace } from './engraveMarks'
 import bravura from '@coderline/alphatab/font/Bravura.woff2?url'
 import { beatList, guitarTuning, measureSettings, writtenKey, type Beat, type Project } from './model'
 import { resolveScoreNavigation, type NavigationDirection } from './scoreNavigation'
+import { alignBarColumns, enableNumberedStacks } from './scoreRendering'
 
 export function scoreSettings() {
   const settings = new Settings()
@@ -92,7 +93,8 @@ function addScoreBeat(voice: model.Voice, data: Beat, legacyLyrics: boolean, ind
     staff.addChord(id, chord)
     beat.chordId = id
   }
-  for (const tone of data.notes) {
+  const orderedNotes = staff.showNumbered && data.notes.length > 1 ? [...data.notes].sort((a, b) => a.midi - b.midi) : data.notes
+  for (const tone of orderedNotes) {
     const note = new model.Note()
     if (staff.isPercussion) {
       // Match the app's drum playback fallback for notes outside the GM kit.
@@ -246,6 +248,10 @@ export function drawScore(element: HTMLElement, project: Project, part: string |
   }
   reserveMarkSpace(settings, tracks)
   const api = new AlphaTabApi(element, settings)
+  enableNumberedStacks(score)
+  if (!score.stylesheet.perTrackMultiBarRest?.size) {
+    alignBarColumns(api, (part ? tracks[0]?.layout ?? project.layout : project.layout).barsPerLine)
+  }
   api.error.on((error) => onError?.(error instanceof Error ? error : new Error(String(error))))
   api.postRenderFinished.on(() => {
     engraveMarks(element, api.boundsLookup, tracks, scale, (beat) => sourceIndexes.get(beat)?.data)
