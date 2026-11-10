@@ -17,11 +17,27 @@ fn read_project(path: PathBuf) -> Result<String, String> {
 
 #[tauri::command]
 fn write_project(path: PathBuf, data: String) -> Result<(), String> {
+    write_bytes(path, data.as_bytes(), true)
+}
+
+#[tauri::command]
+async fn write_png(path: PathBuf, replace: bool, data: Vec<u8>) -> Result<(), String> {
+    if !data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("无法生成 PNG 图片。".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || write_bytes(path, &data, replace)).await.map_err(io_error)?
+}
+
+fn write_bytes(path: PathBuf, data: &[u8], replace: bool) -> Result<(), String> {
     let parent = path.parent().ok_or("缺少保存目录")?;
     let mut file = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;
-    file.write_all(data.as_bytes()).map_err(io_error)?;
+    file.write_all(data).map_err(io_error)?;
     file.as_file().sync_all().map_err(io_error)?;
-    file.persist(&path).map_err(io_error)?;
+    if replace {
+        file.persist(&path).map_err(io_error)?;
+    } else {
+        file.persist_noclobber(&path).map_err(io_error)?;
+    }
     Ok(())
 }
 
@@ -86,7 +102,7 @@ fn system_language() -> &'static str {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![read_project, write_project, export_pdf, system_language])
+        .invoke_handler(tauri::generate_handler![read_project, write_project, export_pdf, write_png, system_language])
         .run(tauri::generate_context!())
         .expect("could not start Yezi XianPu");
 }

@@ -58,7 +58,7 @@ test('renders the mixed demo, updates the shared score and previews independent 
   await expect(page.getByRole('button', { name: '人声位置 1' })).toContainText('B')
   await page.getByRole('button', { name: '撤销', exact: true }).click()
   await expect(page.getByRole('button', { name: '人声位置 1' })).toContainText('C')
-  await page.getByRole('button', { name: '导出 PDF' }).click()
+  await page.getByRole('button', { name: '导出', exact: true }).click()
   await page.getByLabel('导出范围').selectOption('parts')
   await page.getByRole('checkbox', { name: '人声' }).uncheck()
   await expect(page.getByText('A4 预览 · 吉他（预览第一份）')).toBeVisible()

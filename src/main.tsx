@@ -6,6 +6,7 @@ import { appName, displayMessage, languageKey, languageOf, LanguageContext, mess
   type Language, type LanguagePreference, type Message, type Translate } from './i18n'
 import { ScoreView } from './ScoreView'
 import { PrintSheet } from './PrintSheet'
+import { renderPng } from './exportImage'
 import { PaperEditor } from './PaperEditor'
 import { SoundEditor } from './SoundEditor'
 import { paperDimensions, paperMargin } from './paper'
@@ -34,6 +35,7 @@ const templates = [
 
 type PrintJob = { part: string | null; key: number; project: Project }
 type ExportMode = 'current' | 'score' | 'parts'
+type ExportFormat = 'pdf' | 'png'
 const scoreName = (score: Project, part: string | null, t: Translate) => score.tracks.find((track) => track.id === part)?.name ?? t('总谱')
 
 function readRecovery() {
@@ -72,14 +74,15 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [panel, setPanel] = useState<'settings' | 'export' | 'track' | 'paper' | 'sounds' | null>(null)
   const [confirm, setConfirm] = useState<(() => void) | null>(null)
   const [exportMode, setExportMode] = useState<ExportMode>('current')
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('pdf')
   const [exportParts, setExportParts] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
-  const [printReady, setPrintReady] = useState(false)
+  const [previewPages, setPreviewPages] = useState(0)
   const [zoom, setZoom] = useState(100)
   const fileInput = useRef<HTMLInputElement>(null)
   const copied = useRef<{ beats: Beat[]; tuning: number[] } | null>(null)
-  const afterRender = useRef<{ resolve: () => void; reject: (reason: Error) => void } | null>(null)
+  const afterRender = useRef<{ resolve: (pages: HTMLElement[]) => void; reject: (reason: Error) => void } | null>(null)
   const jobId = useRef(0)
   const dirty = !!project && saved !== project
   const activePart = project?.tracks.some((track) => track.id === part) ? part : null
@@ -238,15 +241,14 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     if (activePart) patchLayout({ mode: next })
     else commit((score) => updateTrack(score, track.id, (item) => ({ ...item, mode: next })))
   }
-  function printRendered() {
-    setPrintReady(true)
-    afterRender.current?.resolve()
+  function printRendered(pages: HTMLElement[]) {
+    afterRender.current?.resolve(pages)
     afterRender.current = null
   }
   function showExport() {
     setExportMode('current')
     setExportParts(project!.tracks.map((item) => item.id))
-    setPrintReady(false)
+    setPreviewPages(0)
     setPanel('export')
   }
   const previewPart = exportMode === 'score' ? null : exportMode === 'parts' ? exportParts[0] ?? activePart : activePart
@@ -255,35 +257,53 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   async function exportSelection() {
     if (!project || busy) return
     setError(null)
-    if (!storage.desktop) { window.print(); return }
-    const targets = exportMode === 'parts' ? exportParts : [previewPart]
-    if (!targets.length) { setError(message('请至少选择一份分谱。')); return }
+    const images = exportFormat === 'png'
+    if (!storage.desktop && !images) { window.print(); return }
     const batch = exportMode === 'parts'
+    const targets = batch ? exportParts : [previewPart]
+    if (!targets.length) { setError(message('请至少选择一份分谱。')); return }
+    const folder = batch || (images && previewPages > 1)
     setBusy(true)
     let completed = 0
     try {
-      const title = storage.fileName(project.title, t) + ' - ' + storage.fileName(scoreName(project, targets[0], t), t)
-      const destination = batch ? await storage.pickDirectory(t) : await storage.pickPdf(title, t)
-      if (typeof destination !== 'string') return
+      const scoreTitle = storage.fileName(project.title, t)
+      const targetName = (id: string | null) => storage.fileName(scoreName(project, id, t), t)
+      const title = scoreTitle + ' - ' + targetName(targets[0])
+      const pickFile = images ? storage.pickPng : storage.pickPdf
+      const destination = storage.desktop
+        ? folder ? await storage.pickDirectory(t, images) : await pickFile(title, t)
+        : ''
+      if (destination === null) return
       for (const [index, item] of targets.entries()) {
-        const output = batch
-          ? destination + '\\' + storage.fileName(project.title, t) + ' - ' + String(index + 1).padStart(2, '0') + ' ' + storage.fileName(scoreName(project, item, t), t) + '.pdf'
-          : destination
-        setPrintReady(false)
-        await new Promise<void>((resolve, reject) => {
+        const name = batch ? scoreTitle + ' - ' + String(index + 1).padStart(2, '0') + ' ' + targetName(item) : title
+        const pages = await new Promise<HTMLElement[]>((resolve, reject) => {
           const timeout = setTimeout(() => reject(new Error('乐谱排版超时。')), 15000)
           afterRender.current = {
-            resolve: () => { clearTimeout(timeout); requestAnimationFrame(() => requestAnimationFrame(() => resolve())) },
+            resolve: (pages) => { clearTimeout(timeout); requestAnimationFrame(() => requestAnimationFrame(() => resolve(pages))) },
             reject: (cause) => { clearTimeout(timeout); reject(cause) },
           }
           setPrintJob({ project, part: item, key: ++jobId.current })
         })
         await document.fonts.ready
-        const { width, height } = paperDimensions(paperFor(project, item))
-        await storage.exportPdf(output, !batch, width, height)
-        completed++
+        if (images) {
+          for (const [pageIndex, page] of pages.entries()) {
+            const suffix = pages.length > 1 ? t(' - 第 {page} 页', { page: String(pageIndex + 1).padStart(2, '0') }) : ''
+            const filename = name + suffix + '.png'
+            const png = await renderPng(page)
+            if (storage.desktop) {
+              await storage.exportPng(folder ? destination + '\\' + filename : destination, !folder, png)
+            } else {
+              storage.downloadBlob(filename, png)
+            }
+            completed++
+          }
+        } else {
+          const { width, height } = paperDimensions(paperFor(project, item))
+          await storage.exportPdf(folder ? destination + '\\' + name + '.pdf' : destination, !folder, width, height)
+          completed++
+        }
       }
-      setNotice(message('已导出 {count} 份 PDF', { count: completed }))
+      setNotice(message(images ? '已导出 {count} 张 PNG 图片' : '已导出 {count} 份 PDF', { count: completed }))
       setPanel(null)
     } catch (cause) {
       setError(message('导出中断，已完成 {count} 份。', { count: completed }, cause))
@@ -328,7 +348,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           <option value="system">{t('跟随系统')}</option><option value="zh" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option>
         </select>{project ? <>
           <button className="quiet" aria-busy={audioState === 'loading'} onClick={() => void togglePlay()}>{audioState !== 'idle' ? '■ ' + t('停止') : '▶ ' + t('试听')}</button>
-          <button className="primary" onClick={showExport}>{t('导出 PDF')}</button>
+          <button className="primary" onClick={showExport}>{t('导出')}</button>
         </> : <span className="tag">{t('离线写谱工作台')}</span>}</div>
       </header>
       {!project ? <main className="home">
@@ -470,26 +490,31 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           })))
         }}>{Array.from({ length: 92 }, (_, n) => <option key={n} value={n}>{pitchNames[n % 12]}{Math.floor(n / 12) - 1}</option>)}</select></label>)}</div></>}
     </Modal>}
-    {project && panel === 'export' && <Modal title={t('导出 PDF')} close={() => { if (!busy) setPanel(null) }} wide>
-      <div className="export-controls"><label>{t('导出范围')}<select disabled={busy} value={exportMode} onChange={(e) => { setPrintReady(false); setExportMode(e.target.value as ExportMode) }}>
+    {project && panel === 'export' && <Modal title={t('导出')} close={() => { if (!busy) setPanel(null) }} wide>
+      <div className="export-controls">
+      <label>{t('导出格式')}<select disabled={busy} value={exportFormat} onChange={(e) => setExportFormat(e.target.value as ExportFormat)}>
+        <option value="pdf">{t('PDF 乐谱')}</option><option value="png">{t('PNG 图片')}</option>
+      </select></label>
+      <label>{t('导出范围')}<select disabled={busy} value={exportMode} onChange={(e) => { setPreviewPages(0); setExportMode(e.target.value as ExportMode) }}>
         <option value="current">{t('当前谱')}</option><option value="score">{t('整份总谱')}</option><option value="parts">{t('批量导出分谱')}</option>
-      </select></label><button className="primary" disabled={busy || !printReady || (exportMode === 'parts' && !exportParts.length)} onClick={() => void exportSelection()}>
+      </select></label><button className="primary" disabled={busy || !previewPages || (exportMode === 'parts' && !exportParts.length)} onClick={() => void exportSelection()}>
         {t(busy ? '正在导出…' : '选择保存位置')}</button></div>
       {exportMode === 'parts' && <fieldset><legend>{t('选择需要导出的分谱')}</legend>{project.tracks.map((item) => <label className="checkbox" key={item.id}>
         <input type="checkbox" disabled={busy} checked={exportParts.includes(item.id)} onChange={(e) => {
           const next = e.target.checked ? [...exportParts, item.id] : exportParts.filter((id) => id !== item.id)
-          if (next[0] !== exportParts[0]) setPrintReady(false)
+          if ((next[0] ?? activePart) !== previewPart) setPreviewPages(0)
           setExportParts(next)
         }} />{item.name}</label>)}</fieldset>}
+      {exportFormat === 'png' && <p className="preview-label">{t('每页保存为一张 PNG 图片。')}</p>}
       {error && <p className="inline-error" role="alert">{displayMessage(t, error)}</p>}<div className="preview-label">{t(previewPaper?.size === 'a3' ? 'A3 预览' : previewPaper?.size === 'custom' ? '自定义纸张预览' : 'A4 预览')} · {scoreName(project, previewPart, t)}{exportMode === 'parts' ? t('（预览第一份）') : ''}</div>
-      <div className="preview-scroll"><PrintSheet key={exportMode + ":" + previewPart} project={project} part={previewPart} onReady={() => setPrintReady(true)} onError={(cause) => setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause))} /></div>
+      <div className="preview-scroll"><PrintSheet key={exportMode + ":" + previewPart} project={project} part={previewPart} onReady={(pages) => setPreviewPages(pages.length)} onError={(cause) => setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause))} /></div>
     </Modal>}
     {confirm && <Modal title={t('保存当前工程？')} close={() => setConfirm(null)}>
       <p>{t('当前工程有未保存的改动。')}</p><div className="inline"><button className="primary" onClick={async () => {
         if (await persist()) { setConfirm(null); confirm() }
       }}>{t('保存并继续')}</button><button onClick={() => discard(confirm)}>{t('放弃改动')}</button><button onClick={() => setConfirm(null)}>{t('取消')}</button></div>
     </Modal>}
-    {(printJob || (!storage.desktop && project && panel === 'export')) && <div className="print-only" aria-hidden="true">
+    {(printJob || (!storage.desktop && project && panel === 'export' && exportFormat === 'pdf')) && <div className="print-only" aria-hidden="true">
       <style>{'@page { size: ' + printDimensions.width + 'mm ' + printDimensions.height + 'mm; margin: ' + paperMargin + 'mm; }'}</style>
       <PrintSheet key={printJob?.key ?? 0} project={printJob?.project ?? project!} part={printJob ? printJob.part : previewPart}
         onReady={printRendered} onError={(cause) => { afterRender.current?.reject(cause); setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause)) }} />

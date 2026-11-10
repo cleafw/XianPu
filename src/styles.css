@@ -116,7 +116,8 @@ h1, h2 { margin: 0; }
 .modal-body { display: grid; gap: 12px; padding: 14px 16px; }
 .sound-tracks { display: grid; gap: 8px; max-height: 44vh; overflow-y: auto; padding-right: 4px; }
 .tuning { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.export-controls { display: flex; gap: 10px; align-items: end; justify-content: space-between; }
+.export-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.export-controls .primary { margin-inline-start: auto; }
 .preview-label { color: var(--muted); font-size: 12px; }
 .preview-scroll { overflow: auto; max-height: 55vh; background: #e4eae5; padding: 10px; border-radius: 8px; }
 .print-sheet { width: var(--paper-width, 210mm); min-height: 240px; background: white; padding: 0; margin-inline: auto; color: #151515; }

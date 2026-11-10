@@ -8,7 +8,7 @@ import type { CSSProperties } from 'react'
 const labelHeight = 28
 
 export function PrintSheet({ project, part, onReady, onError }: {
-  project: Project; part: string | null; onReady: () => void; onError: (error: Error) => void
+  project: Project; part: string | null; onReady: (pages: HTMLElement[]) => void; onError: (error: Error) => void
 }) {
   const { t } = useLanguage()
   const { width, height } = paperDimensions(paperFor(project, part))
@@ -60,7 +60,7 @@ export function PrintSheet({ project, part, onReady, onError }: {
       occupied += Math.min(height, Math.max(maxHeight, 0))
       if (system) systems++
     }
-    onReady()
+    onReady([...pages.current.querySelectorAll<HTMLElement>('.print-page')])
   }
   return <div className="print-sheet" style={{
     '--paper-width': width + 'mm', '--paper-height': height + 'mm', '--paper-margin': paperMargin + 'mm',
