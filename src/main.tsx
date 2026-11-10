@@ -359,11 +359,16 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
               setPart(added.id)
               event.currentTarget.closest('details')?.removeAttribute('open')
             }}>{t((['人声简谱', '吉他六线谱', '五线谱乐器'] as const)[index])}</button>)}</div></details>
-          <div className="sidebar-foot"><button onClick={() => setPanel('settings')}>{t('曲谱设置')}</button><button onClick={() => setPanel('track')}>{t('乐器设置')}</button><button onClick={() => setPanel('sounds')}>{t('试听音色')}</button></div>
+          <div className="sidebar-foot">
+            <button onClick={() => setPanel('settings')}>{t('曲谱设置')}</button>
+            <button onClick={() => setPanel('track')}>{t('乐器设置')}</button>
+            <button onClick={() => setPanel('sounds')}>{t('试听音色')}</button>
+            <button onClick={() => setPanel('paper')}>{t('纸张设置')}</button>
+          </div>
         </nav>
         <section className="canvas" aria-label={t('谱面工作区')}>
           <div className="canvas-heading"><div><span className="eyebrow">{scoreName(project, activePart, t)}</span><h1>{project.title}</h1></div>
-            <div className="canvas-controls"><button className="paper-button" onClick={() => setPanel('paper')}>{t('纸张设置')}</button><label>{t('谱式')}<select value={mode} onChange={(event) => selectMode(event.target.value as Mode)}>
+            <div className="canvas-controls"><label>{t('谱式')}<select value={mode} onChange={(event) => selectMode(event.target.value as Mode)}>
               {Object.entries(modes).filter(([key]) => track?.kind === 'guitar' || key === 'staff' || key === 'numbered')
                 .map(([key, value]) => <option key={key} value={key}>{t(value)}</option>)}</select></label>
               <label>{t('每行小节')}<select value={viewLayout!.barsPerLine} onChange={(e) => patchLayout({ barsPerLine: Number(e.target.value) })}>
