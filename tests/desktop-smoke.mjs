@@ -32,7 +32,7 @@ try {
   await page.getByRole('button', { name: '打开弹唱示例' }).click()
   await expect(page.locator('.canvas .score-render')).toContainText('五线谱乐器')
   await page.getByRole('button', { name: '▶ 试听' }).click()
-  await expect(page.getByRole('button', { name: '■ 停止' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '■ 停止' })).toHaveAttribute('aria-busy', 'false', { timeout: 20000 })
   await page.getByRole('button', { name: '■ 停止' }).click()
   await expect(page.getByRole('button', { name: '▶ 试听' })).toBeVisible()
 
@@ -100,6 +100,28 @@ try {
     locker.stdin.end()
   }
 
+  await page.getByRole('button', { name: '纸张设置' }).click()
+  await page.getByLabel('纸张尺寸').selectOption('a3')
+  await page.getByRole('button', { name: '应用纸张设置' }).click()
+  selectedPdf = join(directory, 'Windows A3.pdf')
+  await page.getByRole('button', { name: '导出 PDF' }).click()
+  await expect(page.getByText('A3 预览 · 总谱')).toBeVisible()
+  await page.getByRole('button', { name: '选择保存位置' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 20000 })
+
+  await page.getByRole('navigation').getByRole('button', { name: '吉他', exact: true }).click()
+  await page.getByRole('button', { name: '纸张设置' }).click()
+  await page.getByLabel('纸张尺寸').selectOption('custom')
+  await page.getByLabel('纸张宽度（mm）').fill('330')
+  await page.getByLabel('纸张高度（mm）').fill('220')
+  await page.getByRole('button', { name: '应用纸张设置' }).click()
+  selectedPdf = join(directory, 'Windows 330x220.pdf')
+  await page.getByRole('button', { name: '导出 PDF' }).click()
+  await expect(page.getByText('自定义纸张预览 · 吉他')).toBeVisible()
+  await page.getByRole('button', { name: '选择保存位置' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 20000 })
+
+  await page.getByRole('navigation').getByRole('button', { name: '总谱', exact: true }).click()
   await writeFile(projectPath, '{"version":99}')
   await page.getByRole('button', { name: '打开', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('打开失败')
@@ -107,7 +129,7 @@ try {
   assert.deepEqual(errors, [])
   await page.getByRole('button', { name: '关闭提示' }).click()
   await page.screenshot({ path: join(directory, '工作台.png') })
-  console.log('Windows 烟测通过：系统语言、手动切换、渲染、试听、保存重开、A4 导出、批量分谱、冲突保护和损坏工程提示')
+  console.log('Windows 烟测通过：系统语言、手动切换、渲染、音色试听、保存重开、A4／A3／自定义尺寸导出、批量分谱、冲突保护和损坏工程提示')
 } finally {
   if (!page.isClosed()) {
     await page.evaluate(() => { void window.__TAURI_INTERNALS__.invoke('plugin:window|destroy', { label: 'main' }) }).catch(() => {})

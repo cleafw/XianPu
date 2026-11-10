@@ -1,16 +1,18 @@
 import { useRef } from 'react'
 import { ScoreView } from './ScoreView'
 import { useLanguage } from './i18n'
-import type { Project } from './model'
+import { paperFor, type Project } from './model'
+import { paperDimensions, paperMargin, pxPerMm } from './paper'
+import type { CSSProperties } from 'react'
 
-// These dimensions match the printable area inside the A4 CSS page margins.
-const contentHeight = 1030
 const labelHeight = 28
 
 export function PrintSheet({ project, part, onReady, onError }: {
   project: Project; part: string | null; onReady: () => void; onError: (error: Error) => void
 }) {
   const { t } = useLanguage()
+  const { width, height } = paperDimensions(paperFor(project, part))
+  const contentHeight = Math.floor((height - 2 * paperMargin) * pxPerMm) - 2
   const source = useRef<HTMLDivElement>(null)
   const pages = useRef<HTMLDivElement>(null)
   const instrument = project.tracks.find((track) => track.id === part)
@@ -60,7 +62,9 @@ export function PrintSheet({ project, part, onReady, onError }: {
     }
     onReady()
   }
-  return <div className="print-sheet">
+  return <div className="print-sheet" style={{
+    '--paper-width': width + 'mm', '--paper-height': height + 'mm', '--paper-margin': paperMargin + 'mm',
+  } as CSSProperties}>
     <div className="print-render-source" ref={source} aria-hidden="true">
       <ScoreView project={project} part={part} onReady={paginate} onError={onError} />
     </div>

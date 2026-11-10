@@ -1,6 +1,6 @@
 {
   "name": "yezi-xianpu",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "",
   "scripts": {
     "test": "node --experimental-strip-types --test tests/model.test.ts",
@@ -17,6 +17,7 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@coderline/alphatab-vite": "1.8.4",
     "@playwright/test": "1.65.0",
     "@tauri-apps/cli": "2.12.4",
     "@types/react": "19.3.0",

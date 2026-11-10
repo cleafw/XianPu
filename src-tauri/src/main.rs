@@ -26,10 +26,13 @@ fn write_project(path: PathBuf, data: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn export_pdf(window: WebviewWindow, path: PathBuf, replace: bool) -> Result<(), String> {
+async fn export_pdf(window: WebviewWindow, path: PathBuf, replace: bool, width: f64, height: f64) -> Result<(), String> {
     use webview2_com::{Microsoft::Web::WebView2::Win32::{ICoreWebView2_2, ICoreWebView2_7, ICoreWebView2Environment6}, PrintToPdfCompletedHandler};
     use windows_core::{Interface, HSTRING, PCWSTR};
 
+    if !(80.0..=600.0).contains(&width) || !(100.0..=1000.0).contains(&height) {
+        return Err("宽度须为 80–600 mm，高度须为 100–1000 mm。".into());
+    }
     let parent = path.parent().ok_or("缺少导出目录")?;
     let temporary = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?.into_temp_path();
     let temporary_name = Path::new(&temporary).to_string_lossy().into_owned();
@@ -42,8 +45,12 @@ async fn export_pdf(window: WebviewWindow, path: PathBuf, replace: bool) -> Resu
             let environment = unsafe { core.cast::<ICoreWebView2_2>()?.Environment()? };
             let settings = unsafe { environment.cast::<ICoreWebView2Environment6>()?.CreatePrintSettings()? };
             unsafe {
-                settings.SetPageWidth(210.0 / 25.4)?;
-                settings.SetPageHeight(297.0 / 25.4)?;
+                settings.SetPageWidth(width / 25.4)?;
+                settings.SetPageHeight(height / 25.4)?;
+                settings.SetMarginTop(12.0 / 25.4)?;
+                settings.SetMarginBottom(12.0 / 25.4)?;
+                settings.SetMarginLeft(12.0 / 25.4)?;
+                settings.SetMarginRight(12.0 / 25.4)?;
                 settings.SetShouldPrintHeaderAndFooter(false)?;
             }
             let callback = PrintToPdfCompletedHandler::create(Box::new(move |status, written| {

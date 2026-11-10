@@ -180,7 +180,26 @@ const english = {
   "选择分谱文件夹": "Choose a folder for parts",
   "缺少保存目录": "The save folder is missing.",
   "缺少导出目录": "The export folder is missing.",
-  "生成 PDF 失败": "Could not generate the PDF."
+  "生成 PDF 失败": "Could not generate the PDF.",
+  "纸张设置": "Paper settings",
+  "纸张尺寸": "Paper size",
+  "跟随总谱": "Use full-score paper",
+  "自定义尺寸": "Custom size",
+  "纸张宽度（mm）": "Paper width (mm)",
+  "纸张高度（mm）": "Paper height (mm)",
+  "宽度须为 80–600 mm，高度须为 100–1000 mm。": "Width must be 80–600 mm and height 100–1000 mm.",
+  "预览和 PDF 使用 {width} × {height} mm。": "Preview and PDF use {width} × {height} mm.",
+  "应用纸张设置": "Apply paper settings",
+  "A3 预览": "A3 preview",
+  "自定义纸张预览": "Custom paper preview",
+  "试听音色": "Playback sounds",
+  "音色只影响试听，谱面和音符保持原样。": "Playback sounds leave score notation and notes intact.",
+  "统一音色": "Sound for all parts",
+  "应用到所有声部": "Apply to all parts",
+  "无法启动音色播放器。": "Could not start the instrument player.",
+  "加载试听音色超时。": "Loading playback sounds timed out.",
+  "无法读取试听音色库。": "Could not read the playback sound bank.",
+  "正在载入音色…": "Loading sounds…"
 } as const
 
 export type Language = 'zh' | 'en'

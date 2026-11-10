@@ -6,7 +6,10 @@ import { appName, displayMessage, languageKey, languageOf, LanguageContext, mess
   type Language, type LanguagePreference, type Message, type Translate } from './i18n'
 import { ScoreView } from './ScoreView'
 import { PrintSheet } from './PrintSheet'
-import { beatList, blank, changeBeat, createProject, createTrack, keyNames, kinds, measureDifference, modes, parseProject,
+import { PaperEditor } from './PaperEditor'
+import { SoundEditor } from './SoundEditor'
+import { paperDimensions, paperMargin } from './paper'
+import { beatList, blank, changeBeat, createProject, createTrack, keyNames, kinds, measureDifference, modes, paperFor, parseProject,
   pitchNames, type Beat, type Kind, type Layout, type Mode, type Position, type Project, type Track } from './model'
 import { playScore, stopPlayback } from './playback'
 import * as storage from './storage'
@@ -65,8 +68,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [selection, setSelection] = useState<Position>({ track: '', bar: 0, beat: 0 })
   const [notice, setNotice] = useState<Message | null>(null)
   const [error, setError] = useState<Message | null>(null)
-  const [playing, setPlaying] = useState(false)
-  const [panel, setPanel] = useState<'settings' | 'export' | 'track' | null>(null)
+  const [audioState, setAudioState] = useState<'idle' | 'loading' | 'playing'>('idle')
+  const [panel, setPanel] = useState<'settings' | 'export' | 'track' | 'paper' | 'sounds' | null>(null)
   const [confirm, setConfirm] = useState<(() => void) | null>(null)
   const [exportMode, setExportMode] = useState<ExportMode>('current')
   const [exportParts, setExportParts] = useState<string[]>([])
@@ -89,6 +92,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const mode = track ? activePart ? track.layout.mode ?? track.mode : track.mode : 'numbered'
   const entryMode = mode === 'staff-tab' && position.lane === 'staff' ? 'staff' : mode
   const viewLayout = project && activePart ? track!.layout : project?.layout
+  const page = project ? paperDimensions(paperFor(project, activePart)) : paperDimensions()
   const activeRef = useRef({ project, dirty, path, saved, busy })
   activeRef.current = { project, dirty, path, saved, busy }
   const commit = (edit: (score: Project) => Project) => dispatch({ type: 'edit', edit })
@@ -103,7 +107,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
 
   function load(score: Project | null, filename: string | null = null, clean = false) {
     stopPlayback()
-    setPlaying(false)
+    setAudioState('idle')
     setError(null)
     setNotice(null)
     setPanel(null)
@@ -246,6 +250,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setPanel('export')
   }
   const previewPart = exportMode === 'score' ? null : exportMode === 'parts' ? exportParts[0] ?? activePart : activePart
+  const previewPaper = project ? paperFor(project, previewPart) : undefined
+  const printDimensions = printJob ? paperDimensions(paperFor(printJob.project, printJob.part)) : paperDimensions(previewPaper)
   async function exportSelection() {
     if (!project || busy) return
     setError(null)
@@ -273,7 +279,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           setPrintJob({ project, part: item, key: ++jobId.current })
         })
         await document.fonts.ready
-        await storage.exportPdf(output, !batch)
+        const { width, height } = paperDimensions(paperFor(project, item))
+        await storage.exportPdf(output, !batch, width, height)
         completed++
       }
       setNotice(message('已导出 {count} 份 PDF', { count: completed }))
@@ -288,9 +295,12 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }
   async function togglePlay() {
     if (!project) return
-    if (playing) { stopPlayback(); setPlaying(false); return }
-    try { setPlaying(true); await playScore(project, activePart, () => setPlaying(false)) }
-    catch (cause) { setPlaying(false); setError(message('无法试听。', undefined, cause)) }
+    if (audioState !== 'idle') { stopPlayback(); setAudioState('idle'); return }
+    try {
+      setAudioState('loading')
+      await playScore(project, activePart, () => setAudioState('idle'), () => setAudioState('playing'))
+    }
+    catch (cause) { setAudioState('idle'); setError(message('无法试听。', undefined, cause)) }
   }
 
   function startProject(template: Parameters<typeof createProject>[0]) {
@@ -317,7 +327,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           disabled={busy} onChange={(event) => setPreference(event.target.value as LanguagePreference)}>
           <option value="system">{t('跟随系统')}</option><option value="zh" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option>
         </select>{project ? <>
-          <button className="quiet" onClick={() => void togglePlay()}>{playing ? '■ ' + t('停止') : '▶ ' + t('试听')}</button>
+          <button className="quiet" aria-busy={audioState === 'loading'} onClick={() => void togglePlay()}>{audioState !== 'idle' ? '■ ' + t('停止') : '▶ ' + t('试听')}</button>
           <button className="primary" onClick={showExport}>{t('导出 PDF')}</button>
         </> : <span className="tag">{t('离线写谱工作台')}</span>}</div>
       </header>
@@ -349,11 +359,11 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
               setPart(added.id)
               event.currentTarget.closest('details')?.removeAttribute('open')
             }}>{t((['人声简谱', '吉他六线谱', '五线谱乐器'] as const)[index])}</button>)}</div></details>
-          <div className="sidebar-foot"><button onClick={() => setPanel('settings')}>{t('曲谱设置')}</button><button onClick={() => setPanel('track')}>{t('乐器设置')}</button></div>
+          <div className="sidebar-foot"><button onClick={() => setPanel('settings')}>{t('曲谱设置')}</button><button onClick={() => setPanel('track')}>{t('乐器设置')}</button><button onClick={() => setPanel('sounds')}>{t('试听音色')}</button></div>
         </nav>
         <section className="canvas" aria-label={t('谱面工作区')}>
           <div className="canvas-heading"><div><span className="eyebrow">{scoreName(project, activePart, t)}</span><h1>{project.title}</h1></div>
-            <div className="canvas-controls"><label>{t('谱式')}<select value={mode} onChange={(event) => selectMode(event.target.value as Mode)}>
+            <div className="canvas-controls"><button className="paper-button" onClick={() => setPanel('paper')}>{t('纸张设置')}</button><label>{t('谱式')}<select value={mode} onChange={(event) => selectMode(event.target.value as Mode)}>
               {Object.entries(modes).filter(([key]) => track?.kind === 'guitar' || key === 'staff' || key === 'numbered')
                 .map(([key, value]) => <option key={key} value={key}>{t(value)}</option>)}</select></label>
               <label>{t('每行小节')}<select value={viewLayout!.barsPerLine} onChange={(e) => patchLayout({ barsPerLine: Number(e.target.value) })}>
@@ -361,7 +371,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
               <label>{t('每页谱行')}<select value={viewLayout!.systemsPerPage} onChange={(e) => patchLayout({ systemsPerPage: Number(e.target.value) })}>
                 {Array.from({ length: 6 }, (_, i) => <option key={i + 1}>{i + 1}</option>)}</select></label>
               <label>{t('缩放')}<select value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>{[75, 90, 100, 125, 150].map((n) => <option key={n} value={n}>{n}%</option>)}</select></label></div></div>
-          <div className="paper-scroll"><div className="paper" style={{ width: zoom + '%' }}>
+          <div className="paper-scroll"><div className="paper" style={{ width: page.width * zoom / 100 + 'mm', paddingInline: paperMargin * zoom / 100 + 'mm' }}>
             <ScoreView project={project} part={activePart} position={position} scale={zoom / 100} onSelect={setSelection} onError={(cause) => setError(message('谱面绘制失败。', undefined, cause))} />
           </div></div>
           <section className="position-panel" aria-label={t('小节与录入位置')}>
@@ -409,9 +419,20 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         {(panel || confirm) && <div className="inspector inspector-placeholder" aria-hidden="true" />}
       </main>}
       <footer className="status-bar"><span>{project ? (dirty ? '● ' + t('未保存') : '✓ ' + t('已保存')) : t('叶子弦谱 · 本地工作区')}</span>
-        <span role="status">{notice ? displayMessage(t, notice) : t(project ? '乐谱与草稿保存在本机' : '选择模板，或打开已有工程')}</span></footer>
+        <span role="status">{audioState === 'loading' ? t('正在载入音色…') : notice ? displayMessage(t, notice) : t(project ? '乐谱与草稿保存在本机' : '选择模板，或打开已有工程')}</span></footer>
       {error && panel !== 'export' && <div role="alert" className="toast"><span>{displayMessage(t, error)}</span><button aria-label={t('关闭提示')} onClick={() => setError(null)}>×</button></div>}
     </div>
+    {project && panel === 'sounds' && <Modal title={t('试听音色')} close={() => setPanel(null)}>
+      <SoundEditor tracks={project.tracks} onChange={(sound, id) => {
+        stopPlayback()
+        setAudioState('idle')
+        commit((score) => ({ ...score, tracks: score.tracks.map((item) => !id || item.id === id ? { ...item, sound } : item) }))
+      }} />
+    </Modal>}
+    {project && panel === 'paper' && <Modal title={t('纸张设置')} close={() => setPanel(null)}>
+      <PaperEditor paper={viewLayout?.paper} inherited={activePart ? project.layout.paper ?? { size: 'a4' } : undefined}
+        onApply={(paper) => { patchLayout({ paper }); setPanel(null) }} />
+    </Modal>}
     {project && panel === 'settings' && <Modal title={t('曲谱设置')} close={() => setPanel(null)}>
       <label>{t('曲名')}<input maxLength={200} value={project.title} onChange={(e) => commit((score) => ({ ...score, title: e.target.value }))} /></label>
       <label>{t('作者')}<input maxLength={200} value={project.author} onChange={(e) => commit((score) => ({ ...score, author: e.target.value }))} /></label>
@@ -455,7 +476,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           if (next[0] !== exportParts[0]) setPrintReady(false)
           setExportParts(next)
         }} />{item.name}</label>)}</fieldset>}
-      {error && <p className="inline-error" role="alert">{displayMessage(t, error)}</p>}<div className="preview-label">{t('A4 预览')} · {scoreName(project, previewPart, t)}{exportMode === 'parts' ? t('（预览第一份）') : ''}</div>
+      {error && <p className="inline-error" role="alert">{displayMessage(t, error)}</p>}<div className="preview-label">{t(previewPaper?.size === 'a3' ? 'A3 预览' : previewPaper?.size === 'custom' ? '自定义纸张预览' : 'A4 预览')} · {scoreName(project, previewPart, t)}{exportMode === 'parts' ? t('（预览第一份）') : ''}</div>
       <div className="preview-scroll"><PrintSheet key={exportMode + ":" + previewPart} project={project} part={previewPart} onReady={() => setPrintReady(true)} onError={(cause) => setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause))} /></div>
     </Modal>}
     {confirm && <Modal title={t('保存当前工程？')} close={() => setConfirm(null)}>
@@ -464,6 +485,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       }}>{t('保存并继续')}</button><button onClick={() => discard(confirm)}>{t('放弃改动')}</button><button onClick={() => setConfirm(null)}>{t('取消')}</button></div>
     </Modal>}
     {(printJob || (!storage.desktop && project && panel === 'export')) && <div className="print-only" aria-hidden="true">
+      <style>{'@page { size: ' + printDimensions.width + 'mm ' + printDimensions.height + 'mm; margin: ' + paperMargin + 'mm; }'}</style>
       <PrintSheet key={printJob?.key ?? 0} project={printJob?.project ?? project!} part={printJob ? printJob.part : previewPart}
         onReady={printRendered} onError={(cause) => { afterRender.current?.reject(cause); setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause)) }} />
     </div>}

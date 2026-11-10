@@ -1,3 +1,6 @@
+import { isSound } from './sounds.ts'
+import { validPaper, type Paper } from './paper.ts'
+
 export type Mode = 'numbered' | 'tab' | 'staff' | 'staff-tab'
 export type Kind = 'voice' | 'guitar' | 'instrument'
 export type Duration = 1 | 2 | 4 | 8 | 16 | 32 | 64
@@ -6,8 +9,8 @@ export type Beat = {
   duration: Duration; dots: 0 | 1; triplet: boolean; notes: Tone[];
   draft?: boolean; lyric?: string; chord?: string; diagram?: number[]; tie?: boolean; slur?: boolean
 }
-export type Layout = { mode?: Mode; barsPerLine: number; systemsPerPage: number }
-export type Track = { id: string; name: string; kind: Kind; mode: Mode; tuning: number[]; bars: Beat[][]; layout: Layout }
+export type Layout = { mode?: Mode; barsPerLine: number; systemsPerPage: number; paper?: Paper }
+export type Track = { id: string; name: string; kind: Kind; mode: Mode; sound?: number; tuning: number[]; bars: Beat[][]; layout: Layout }
 export type Project = {
   version: 1; title: string; author: string; bpm: number; key: number;
   meter: [number, number]; pickup: number; measures: { start?: boolean; end?: boolean }[];
@@ -22,6 +25,9 @@ export const keyNames = ['C♭', 'G♭', 'D♭', 'A♭', 'E♭', 'B♭', 'F', 'C
 export const pitchNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B']
 const intervals = [0, 2, 4, 5, 7, 9, 11]
 export const layout = (): Layout => ({ barsPerLine: 4, systemsPerPage: 3 })
+export function paperFor(score: Project, part: string | null): Paper {
+  return score.tracks.find((track) => track.id === part)?.layout.paper ?? score.layout.paper ?? { size: 'a4' }
+}
 export const blank = (duration: Duration = 4): Beat => ({ duration, dots: 0, triplet: false, notes: [], draft: true })
 export function ticks(beat: Beat) {
   return 3840 / beat.duration * (beat.dots ? 1.5 : 1) * (beat.triplet ? 2 / 3 : 1)
@@ -111,7 +117,8 @@ const string = (value: unknown, max = 200) => typeof value === 'string' && value
 const flag = (value: unknown) => value === undefined || typeof value === 'boolean'
 const modeValid = (value: unknown): value is Mode => typeof value === 'string' && Object.hasOwn(modes, value)
 const layoutValid = (value: unknown) => object(value) && number(value.barsPerLine, 1, 12) &&
-  number(value.systemsPerPage, 1, 6) && (value.mode === undefined || modeValid(value.mode))
+  number(value.systemsPerPage, 1, 6) && (value.mode === undefined || modeValid(value.mode)) &&
+  (value.paper === undefined || validPaper(value.paper))
 function beatValid(beat: unknown, tuning: number[]) {
   return object(beat) && durations.includes(beat.duration as Duration) && number(beat.dots, 0, 1)
     && typeof beat.triplet === 'boolean' && flag(beat.draft) && flag(beat.tie) && flag(beat.slur)
@@ -135,7 +142,7 @@ export function parseProject(raw: string): Project {
   const count = data.measures.length
   for (const track of data.tracks) {
     if (!object(track) || typeof track.id !== 'string' || !track.id || ids.has(track.id) || !string(track.name)
-      || typeof track.kind !== 'string' || !Object.hasOwn(kinds, track.kind) || !modeValid(track.mode) || !layoutValid(track.layout)
+      || typeof track.kind !== 'string' || !Object.hasOwn(kinds, track.kind) || !modeValid(track.mode) || !layoutValid(track.layout) || (track.sound !== undefined && !isSound(track.sound))
       || !Array.isArray(track.tuning) || track.tuning.length !== (track.kind === 'guitar' ? 6 : 0)
       || !track.tuning.every((note) => number(note, 0, 91))
       || !Array.isArray(track.bars) || track.bars.length !== count

@@ -1,2 +1,3 @@
 import { defineConfig } from 'vite'
-export default defineConfig({ server: { host: '127.0.0.1', port: 1420, strictPort: true }, clearScreen: false })
+import { alphaTab } from '@coderline/alphatab-vite'
+export default defineConfig({ plugins: [alphaTab({ assetOutputDir: false, audioWorklets: false })], server: { host: '127.0.0.1', port: 1420, strictPort: true, watch: { ignored: ['**/src-tauri/target/**', '**/artifacts/**'] } }, clearScreen: false })
