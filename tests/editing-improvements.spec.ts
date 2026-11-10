@@ -1,0 +1,138 @@
+import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import { parseProject } from '../src/model'
+
+test('drags measures, covers and inserts a copied range, and changes an existing octave', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  const measures = page.getByRole('region', { name: '小节与录入位置' })
+  const bar = (n: number) => measures.getByRole('button', { name: new RegExp('^第 ' + n + ' 小节') })
+  const center = async (n: number) => {
+    const box = (await bar(n).boundingBox())!
+    return [box.x + box.width / 2, box.y + box.height / 2] as const
+  }
+  await bar(2).scrollIntoViewIfNeeded()
+  await page.mouse.move(...await center(2))
+  await page.mouse.down()
+  await page.mouse.move(...await center(4), { steps: 8 })
+  await page.mouse.up()
+  for (const n of [2, 3, 4]) await expect(bar(n)).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.score-measure-highlight')).toHaveCount(3)
+  await page.keyboard.press('Control+c')
+  await bar(6).click()
+  const firstNote = page.getByRole('button', { name: '人声位置 1' })
+  await expect(firstNote).toContainText('C')
+  await page.keyboard.press('Control+v')
+  await expect(page.getByRole('status')).toContainText('已粘贴 3 小节')
+  await expect(firstNote).toContainText('A')
+  await page.keyboard.press('Control+z')
+  await expect(firstNote).toContainText('C')
+  await bar(6).click({ button: 'right' })
+  await page.getByRole('button', { name: '在后面插入粘贴', exact: true }).click()
+  await expect(bar(11)).toBeVisible()
+  await bar(7).click()
+  await page.getByRole('button', { name: '人声位置 1' }).click()
+  await page.keyboard.press('Shift+ArrowUp')
+  await expect(page.getByText('所选音：A5 · 八度 1')).toBeVisible()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '保存 •' }).click()
+  const score = parseProject(await readFile((await (await download).path())!, 'utf8'))
+  expect(score.tracks[0].bars[6][0].notes[0].midi).toBe(81)
+  expect(score.tracks[1].bars.slice(6, 9)).toEqual([[], [], []])
+  expect(score.tracks[2].bars).toHaveLength(11)
+})
+
+test('dragging across the main score selects consecutive measures', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await page.getByRole('navigation').getByRole('button', { name: '人声', exact: true }).click()
+  const lyrics = page.locator('.canvas .score-render svg text')
+  const first = lyrics.filter({ hasText: /^晚$/ }).first()
+  const last = lyrics.filter({ hasText: /^我$/ }).first()
+  await first.scrollIntoViewIfNeeded()
+  const from = (await first.boundingBox())!
+  const to = (await last.boundingBox())!
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 })
+  await page.mouse.up()
+  await expect(page.getByText('人声 · 所选小节 1, 2, 3', { exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.score-measure-highlight')).toHaveCount(0)
+})
+
+test('writes printable marks, a pitched grace note, and a cross-system range', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await page.getByRole('navigation').getByRole('button', { name: '人声', exact: true }).click()
+  const score = page.getByRole('region', { name: '谱面工作区' })
+  const editor = page.getByRole('region', { name: '录入面板' })
+  await editor.getByRole('button', { name: '记号面板', exact: true }).click()
+  await editor.getByRole('searchbox', { name: '搜索记号' }).fill('跳音')
+  await editor.getByRole('combobox', { name: '可用记号' }).selectOption('staccato')
+  await editor.getByRole('button', { name: '添加记号' }).click()
+  await expect(score.locator('[data-code=staccato]')).toHaveCount(1)
+  await editor.getByRole('combobox', { name: '跨音记号' }).selectOption('crescendo')
+  await editor.getByRole('button', { name: '设置起点' }).click()
+  await score.getByRole('button', { name: /^第 5 小节/ }).click()
+  await editor.getByRole('button', { name: '在这里结束' }).click()
+  await expect(score.locator('[data-kind=crescendo]')).toHaveCount(2)
+  await score.getByRole('button', { name: /^第 1 小节/ }).click()
+  await editor.getByRole('button', { name: '倚音与成组连音', exact: true }).click()
+  await editor.getByRole('button', { name: '添加前倚音' }).click()
+  await expect(editor.getByRole('button', { name: '移除倚音' })).toBeVisible()
+  await expect(score.locator('[data-code=staccato]')).toHaveCount(1)
+  await editor.getByRole('combobox', { name: '歌词段落' }).selectOption('1')
+  await editor.getByRole('textbox', { name: '歌词', exact: true }).fill('第二段')
+  await expect(score.locator('.score-render')).toContainText('第二段')
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  const preview = page.getByRole('dialog').locator('.print-page')
+  await expect(preview.locator('[data-code=staccato]')).toHaveCount(1)
+  await expect(preview.locator('[data-kind=crescendo]')).toHaveCount(2)
+  await expect(preview.getByText('第二段', { exact: true })).toHaveCount(1)
+  await page.getByLabel('导出格式').selectOption('png')
+  const region = await preview.first().evaluate((sheet) => {
+    const paper = sheet.getBoundingClientRect()
+    const mark = sheet.querySelector('[data-code=staccato]')!.getBoundingClientRect()
+    return { x: (mark.left - paper.left) / paper.width, y: (mark.top - paper.top) / paper.height,
+      width: mark.width / paper.width, height: mark.height / paper.height }
+  })
+  const downloaded = page.waitForEvent('download')
+  await page.getByRole('button', { name: '选择保存位置' }).click()
+  const image = await readFile((await (await downloaded).path())!)
+  expect(image.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+  const ink = await page.evaluate(async ({ png, region }) => {
+    const data = Uint8Array.from(atob(png), (character) => character.charCodeAt(0))
+    const bitmap = await createImageBitmap(new Blob([data], { type: 'image/png' }))
+    const canvas = document.createElement('canvas')
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const context = canvas.getContext('2d')!
+    context.drawImage(bitmap, 0, 0)
+    const sample = context.getImageData(Math.floor(region.x * bitmap.width), Math.floor(region.y * bitmap.height),
+      Math.max(1, Math.ceil(region.width * bitmap.width)), Math.max(1, Math.ceil(region.height * bitmap.height)))
+    return sample.data.filter((value, index) => index % 4 === 0 && value < 120).length
+  }, { png: image.toString('base64'), region })
+  expect(ink).toBeGreaterThan(2)
+})
+
+test('a part page break and page headings are independent of the full score', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await page.getByRole('navigation').getByRole('button', { name: '人声', exact: true }).click()
+  await page.getByRole('button', { name: /^第 3 小节/ }).click()
+  await page.getByRole('button', { name: '曲谱设置', exact: true }).click()
+  const settings = page.getByRole('dialog')
+  await settings.getByRole('checkbox', { name: '此小节起另起一页' }).check()
+  await settings.getByRole('textbox', { name: '打印页眉' }).fill('人声校样')
+  await settings.getByRole('textbox', { name: '打印页脚' }).fill('练习用')
+  await settings.getByRole('button', { name: '关闭', exact: true }).click()
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  const preview = page.getByRole('dialog').locator('.print-page')
+  await expect(preview).toHaveCount(2)
+  await expect(preview.first()).toContainText('人声校样 · 1')
+  await expect(preview.last()).toContainText('人声校样 · 2')
+  await expect(preview.last()).toContainText('练习用')
+  await page.getByLabel('导出范围').selectOption('score')
+  await expect(preview.first()).not.toContainText('人声校样')
+})

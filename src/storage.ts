@@ -9,6 +9,7 @@ export const recoveryKey = 'xianpu.recovery.v1'
 export const readFile = (path: string) => invoke<string>('read_project', { path })
 export const writeFile = (path: string, data: string) => invoke('write_project', { path, data })
 export const systemLanguage = (): Promise<Language> => desktop ? invoke('system_language') : Promise.resolve(languageOf(navigator.language))
+export const openCreatorPage = () => invoke('open_creator_page')
 export const pickProject = (t: Translate) => open({ title: t('打开工程'), filters: projectFilters(t), multiple: false })
 export const savePath = (name: string, t: Translate) => save({ title: t('保存工程'), filters: projectFilters(t), defaultPath: fileName(name, t) + '.xianpu' })
 export const pickPdf = (name: string, t: Translate) => save({ title: t('导出 PDF'), filters: [{ name: t('PDF 乐谱'), extensions: ['pdf'] }], defaultPath: fileName(name, t) + '.pdf' })

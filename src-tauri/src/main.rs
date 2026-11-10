@@ -99,10 +99,21 @@ fn system_language() -> &'static str {
     if primary_language == 0x04 { "zh" } else { "en" }
 }
 
+#[tauri::command]
+fn open_creator_page() -> Result<(), String> {
+    use std::ptr::{null, null_mut};
+    use windows_sys::{w, Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL}};
+
+    let result = unsafe {
+        ShellExecuteW(null_mut(), w!("open"), w!("https://space.bilibili.com/40005809"), null(), null(), SW_SHOWNORMAL)
+    };
+    if result as isize > 32 { Ok(()) } else { Err("无法打开 B 站主页。".into()) }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![read_project, write_project, export_pdf, write_png, system_language])
+        .invoke_handler(tauri::generate_handler![read_project, write_project, export_pdf, write_png, system_language, open_creator_page])
         .run(tauri::generate_context!())
         .expect("could not start Yezi XianPu");
 }

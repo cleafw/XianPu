@@ -59,8 +59,7 @@ export async function renderPng(page: HTMLElement) {
     context.fillStyle = '#fff'
     context.fillRect(0, 0, bounds.width, bounds.height)
     context.drawImage(image, 0, 0, bounds.width, bounds.height)
-    const label = page.querySelector<HTMLElement>('.sheet-label')
-    if (label) {
+    for (const label of page.querySelectorAll<HTMLElement>('.sheet-label')) {
       const box = label.getBoundingClientRect()
       const style = getComputedStyle(label)
       context.fillStyle = style.color

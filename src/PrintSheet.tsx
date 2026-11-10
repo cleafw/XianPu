@@ -16,8 +16,9 @@ export function PrintSheet({ project, part, onReady, onError }: {
   const source = useRef<HTMLDivElement>(null)
   const pages = useRef<HTMLDivElement>(null)
   const instrument = project.tracks.find((track) => track.id === part)
-  const limit = (instrument?.layout ?? project.layout).systemsPerPage
-  function paginate(systemCount: number) {
+  const layout = instrument?.layout ?? project.layout
+  const limit = layout.systemsPerPage
+  function paginate(systemCount: number, firstBars: number[]) {
     if (!source.current || !pages.current) return
     const surface = source.current.querySelector('.at-surface')
     const fragments = [...(surface?.querySelectorAll<SVGSVGElement>(':scope > div > svg') ?? [])]
@@ -30,6 +31,7 @@ export function PrintSheet({ project, part, onReady, onError }: {
     const firstSystem = end - systemCount
     pages.current.replaceChildren()
     let currentPage: HTMLDivElement
+    let footer: HTMLDivElement | undefined
     let occupied = 0
     let systems = 0
     function newPage() {
@@ -38,10 +40,17 @@ export function PrintSheet({ project, part, onReady, onError }: {
       currentPage.className = 'print-page ' + surface!.className
       const label = document.createElement('div')
       label.className = 'sheet-label'
-      label.textContent = (instrument?.name ?? t('总谱')) + ' · ' + (pages.current!.childElementCount + 1)
+      const heading = layout.printHeader || (instrument ? instrument.name + (instrument.scoreNote ? ' · ' + instrument.scoreNote : '') : t('总谱'))
+      label.textContent = heading + (layout.showPageNumbers === false ? '' : ' · ' + (pages.current!.childElementCount + 1))
       currentPage.append(label)
+      footer = layout.printFooter ? document.createElement('div') : undefined
+      if (footer) {
+        footer.className = 'sheet-label sheet-footer'
+        footer.textContent = layout.printFooter ?? ''
+        currentPage.append(footer)
+      }
       pages.current!.append(currentPage)
-      occupied = labelHeight
+      occupied = labelHeight * (footer ? 2 : 1)
       systems = 0
     }
     newPage()
@@ -49,14 +58,14 @@ export function PrintSheet({ project, part, onReady, onError }: {
       const system = index >= firstSystem && index < end
       const height = svg.height.baseVal.value
       const footerReserve = index === end - 1 && hasFooter ? fragments[end].height.baseVal.value : 0
-      if (system && systems && (systems >= limit || occupied + height + footerReserve > contentHeight)) newPage()
+      if (system && systems && (systems >= limit || layout.pageBreaks?.includes(firstBars[index - firstSystem]) || occupied + height + footerReserve > contentHeight)) newPage()
       const copy = svg.cloneNode(true) as SVGSVGElement
       const maxHeight = contentHeight - occupied - footerReserve
       if (height > maxHeight && maxHeight > 30) {
         copy.setAttribute('viewBox', '0 0 ' + svg.width.baseVal.value + ' ' + height)
         copy.setAttribute('height', String(maxHeight))
       }
-      currentPage!.append(copy)
+      currentPage!.insertBefore(copy, footer ?? null)
       occupied += Math.min(height, Math.max(maxHeight, 0))
       if (system) systems++
     }
@@ -66,7 +75,7 @@ export function PrintSheet({ project, part, onReady, onError }: {
     '--paper-width': width + 'mm', '--paper-height': height + 'mm', '--paper-margin': paperMargin + 'mm',
   } as CSSProperties}>
     <div className="print-render-source" ref={source} aria-hidden="true">
-      <ScoreView project={project} part={part} onReady={paginate} onError={onError} />
+      <ScoreView project={project} part={part} print onReady={paginate} onError={onError} />
     </div>
     <div className="print-pages" ref={pages} />
   </div>

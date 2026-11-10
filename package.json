@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "description": "",
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/model.test.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "desktop": "tauri"
