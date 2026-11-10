@@ -363,6 +363,12 @@ const english = {
   "将{panel}贴回右栏": "Dock {panel} in the sidebar",
   "拖动{panel}": "Drag {panel}",
   "已弹出": "Floating",
+  "将{panel}贴回底部": "Dock {panel} at the bottom",
+  "独立窗口未打开，已在主窗口内弹出。": "The separate window could not open. This panel is floating in the main window.",
+  "请先处理主窗口的对话框。": "Finish the dialog in the main window first.",
+  "拍位导航": "Beat navigation",
+  "移除操作": "Remove content",
+  "小节编辑": "Measure editing",
   "如 G 调曲笛、筒音作 5，或古筝 D 调定弦": "For example G dizi, all holes closed = 5, or D guzheng tuning"
 } as const
 

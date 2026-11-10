@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{io::Write, path::{Path, PathBuf}};
-use tauri::WebviewWindow;
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, webview::NewWindowResponse};
 
 fn io_error(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -113,6 +113,47 @@ fn open_creator_page() -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let config = app.config().app.windows.iter().find(|window| window.label == "main")
+                .ok_or("主窗口配置缺失")?;
+            let handle = app.handle().clone();
+            WebviewWindowBuilder::from_config(app, config)?
+                .on_new_window(move |url, features| {
+                    let Some(label) = url.fragment().filter(|label| {
+                        label.strip_prefix("xianpu-panel-").is_some_and(|id| {
+                            id.len() == 36 && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+                        })
+                    }) else { return NewWindowResponse::Deny };
+                    if url.scheme() != "about" || url.path() != "blank" {
+                        return NewWindowResponse::Deny;
+                    }
+                    let Some(main) = handle.get_webview_window("main") else {
+                        return NewWindowResponse::Deny;
+                    };
+                    let result = WebviewWindowBuilder::new(&handle, label, WebviewUrl::External(url.clone()))
+                        .window_features(features)
+                        .title("叶子弦谱")
+                        .min_inner_size(255.0, 155.0)
+                        .skip_taskbar(true)
+                        .owner(&main)
+                        .and_then(|builder| builder.build());
+                    match result {
+                        Ok(window) => {
+                            let app = handle.clone();
+                            let id = label.to_owned();
+                            window.on_window_event(move |event| {
+                                if matches!(event, WindowEvent::Destroyed) {
+                                    let _ = app.emit_to("main", "tool-panel-closed", &id);
+                                }
+                            });
+                            NewWindowResponse::Create { window }
+                        }
+                        Err(_) => NewWindowResponse::Deny,
+                    }
+                })
+                .build()?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![read_project, write_project, export_pdf, write_png, system_language, open_creator_page])
         .run(tauri::generate_context!())
         .expect("could not start Yezi XianPu");

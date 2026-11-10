@@ -1,4 +1,7 @@
 import { createRoot } from 'react-dom/client'
+import { createPortal } from 'react-dom'
+import { ToolPanel, PanelsSuspended } from './ToolPanel'
+import { eventElement, listenWorkspaceKeys } from './panelWindows'
 import { useEffect, useReducer, useRef, useState, type ChangeEvent, type MouseEvent } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Editor } from './Editor'
@@ -103,7 +106,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [selection, setSelection] = useState<Position>({ track: '', bar: 0, beat: 0 })
   const [selectedBars, setSelectedBars] = useState<number[]>([])
   const rangeAnchor = useRef<number | null>(null)
-  const [barMenu, setBarMenu] = useState<{ x: number; y: number; position: Position } | null>(null)
+  const [barMenu, setBarMenu] = useState<{ x: number; y: number; position: Position; document: Document } | null>(null)
   const [pasteStructure, setPasteStructure] = useState(false)
   const [pasteWarning, setPasteWarning] = useState<{ text: string; apply: () => void } | null>(null)
   const [notice, setNotice] = useState<Message | null>(null)
@@ -149,7 +152,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   activeRef.current = { project, dirty, path, saved, busy }
   const commit = (edit: (score: Project) => Project) => dispatch({ type: 'edit', edit })
   const measureSelection = selectedBars.filter((index) => index < (project?.measures.length ?? 0))
-  const measureDrag = useMeasureDrag(({ clientX, clientY }) => measureButton(document.elementFromPoint(clientX, clientY)), selectMeasureRange)
+  const measureDrag = useMeasureDrag(({ clientX, clientY }, doc) => measureButton(doc.elementFromPoint(clientX, clientY)), selectMeasureRange)
 
   function measureButton(element: Element | null) {
     const bar = element?.closest<HTMLButtonElement>('[data-measure-index]')?.dataset.measureIndex
@@ -255,7 +258,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }, [dirty])
   useEffect(() => {
     function shortcuts(event: KeyboardEvent) {
-      if (event.isComposing) return
+      if (event.defaultPrevented || event.isComposing) return
       if (event.key === 'Escape' && !panel && !confirm && !pasteWarning && !barMenu) {
         setSelectedBars([])
         rangeAnchor.current = null
@@ -266,12 +269,12 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         event.preventDefault()
         if (!activeRef.current.busy) void persist(event.shiftKey)
       }
-      if (key === 'z' && !panel && !confirm && !pasteWarning && !barMenu && !(event.target instanceof HTMLElement && event.target.matches('input,textarea'))) {
+      const target = eventElement(event.target)
+      const textInput = target?.matches('input, textarea, select') || target?.isContentEditable
+      if (key === 'z' && !panel && !confirm && !pasteWarning && !barMenu && !textInput) {
         event.preventDefault()
         dispatch({ type: event.shiftKey ? 'redo' : 'undo' })
       }
-      const textInput = event.target instanceof HTMLElement &&
-        (event.target.matches('input, textarea, select') || event.target.isContentEditable)
       if (!project || panel || confirm || pasteWarning || busy || textInput || event.altKey || event.shiftKey) return
       if (key === 'c' || key === 'v') {
         event.preventDefault()
@@ -279,8 +282,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         else pasteSelection(measureSelection.length > 1 ? 'selection' : 'overwrite', measureSelection[0] ?? barIndex)
       }
     }
-    window.addEventListener('keydown', shortcuts)
-    return () => window.removeEventListener('keydown', shortcuts)
+    return listenWorkspaceKeys(shortcuts)
   })
 
   function move(step: 1 | -1) {
@@ -381,7 +383,10 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     event.preventDefault()
     if (!measureSelection.includes(target.bar) || target.track !== position.track || (target.voice ?? 0) !== activeVoice) selectMeasure(target, event)
     setPasteStructure(false)
-    setBarMenu({ x: Math.max(0, Math.min(event.clientX, window.innerWidth - 265)), y: Math.max(0, Math.min(event.clientY, window.innerHeight - 310)), position: target })
+    const doc = event.currentTarget.ownerDocument
+    const view = doc.defaultView ?? window
+    setBarMenu({ x: Math.max(0, Math.min(event.clientX, view.innerWidth - 265)),
+      y: Math.max(0, Math.min(event.clientY, view.innerHeight - 310)), position: target, document: doc })
   }
   function copySelection(all = false) {
     if (!project || !track) return
@@ -646,68 +651,78 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
               onBarSelect={selectMeasure} onBarRange={selectMeasureRange} onBarMenu={showBarMenu} onError={(cause) => setError(message('谱面绘制失败。', undefined, cause))} />
           </div></div>
           <section className="position-panel" aria-label={t('小节与录入位置')}>
-            <div className="position-header"><div><strong>{t('录入位置')}</strong><small>{t('可直接点谱面，也可在这里选择。')}</small>
-              {!!track?.voices?.length && <label>{t('编辑声部')}<select value={activeVoice} onChange={(event) =>
-                selectBeat({ ...position, voice: Number(event.target.value), beat: 0 })}>
-                <option value={0}>{t('主声部')}</option>
-                {track.voices.map((voice, index) => <option value={index + 1} key={index}>{t('附加声部 {number}', { number: index + 1 })}
-                  {voice.staff === 1 ? ' · ' + t('下谱表') : ''}</option>)}
-              </select></label>}
-            </div>
-              <div className="inline">
-                <button disabled={project.measures.length >= 256 || project.measures[barIndex].simile === 'double'}
-                  title={project.measures[barIndex].simile === 'double' ? t('不能拆开两小节重复。') : undefined} onClick={() => {
-                  commit((score) => measuresChange(score, barIndex + 1, true)); selectBeat({ ...position, bar: barIndex + 1, beat: 0 })
-                }}>{t('插入小节')}</button>
-                <button disabled={project.measures.length <= 1} onClick={() => {
-                  commit((score) => measuresChange(score, barIndex, false)); selectBeat({ ...position, bar: Math.min(barIndex, project.measures.length - 2), beat: 0 })
-                }}>{t('删除小节')}</button>
-                <button title="Ctrl+C" onClick={() => copySelection()}>{t('复制小节')}</button>
-                <button title="Ctrl+V" onClick={() => pasteSelection(measureSelection.length > 1 ? 'selection' : 'overwrite', measureSelection[0] ?? barIndex)}>{t('粘贴小节')}</button>
-                <button disabled={!copied.current} onClick={() => pasteSelection('before')}>{t('在前面插入粘贴')}</button>
-              </div></div>
-            {measureSelection.length > 0 && <small>{t('{track} · 所选小节 {bars}', { track: track!.name, bars: measureSelection.map((index) => index + 1).join(', ') })}</small>}
-            <div className="measure-list" aria-label={t('选择小节')} {...measureDrag.handlers} onPointerDown={(event) => {
-              const target = measureButton(event.target instanceof Element ? event.target : null)
-              if (!target || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return
-              selectMeasure(target, event)
-              measureDrag.start(event, target)
-            }}>
-              {project.measures.map((_, index) => {
-                const difference = measureDifference(project, track!, index, activeVoice)
-                const hint = difference ? t(difference > 0 ? '还差 {beats} 拍' : '超出 {beats} 拍', { beats: formatBeats(difference, language) }) : t('拍数完整')
-                return <button key={index} data-measure-index={index} aria-label={t('第 {bar} 小节，{status}', { bar: index + 1, status: hint })}
-                  aria-pressed={measureSelection.includes(index)} data-current={index === barIndex} title={hint}
-                  onClick={(event) => {
-                    if (!event.detail || event.shiftKey || event.ctrlKey || event.metaKey) selectMeasure({ ...position, bar: index }, event)
-                  }} onContextMenu={(event) => showBarMenu({ ...position, bar: index }, event)}>
-                  {index + 1}<span aria-label={hint} className={difference < 0 ? 'over' : difference > 0 ? 'under' : 'full'}>●</span>
-                </button>
-              })}
-            </div>
-            {track && measureDifference(project, track, barIndex, activeVoice) !== 0 && <p className={'measure-status ' + (measureDifference(project, track, barIndex, activeVoice) < 0 ? 'over' : 'under')}>
-              {t('{track}第 {bar} 小节{status}', { track: track.name, bar: barIndex + 1,
-                status: t(measureDifference(project, track, barIndex, activeVoice) > 0 ? '还差 {beats} 拍' : '超出 {beats} 拍',
-                  { beats: formatBeats(measureDifference(project, track, barIndex, activeVoice), language) }) })}
-            </p>}
-            {visible.map((item) => <div className="beat-row" key={item.id}><strong>{item.name}</strong><div>
-              {beatList(project, voiceBars(item, item.id === position.track ? activeVoice : 0)[barIndex], barIndex).map((value, index) => <button key={index}
-                aria-label={t('{track}位置 {beat}', { track: item.name, beat: index + 1 })} aria-pressed={item.id === position.track && index === position.beat}
-                onClick={() => selectBeat({ track: item.id, bar: barIndex, beat: index, voice: item.id === position.track ? activeVoice : 0 })}>
-                <small>{index + 1}</small><span>{value.draft ? '·' : value.notes.length ? value.notes.map((note) => note.string ? note.fret : pitchNames[note.midi % 12]).join('·') : t('休')}</span>
-              </button>)}
-            </div></div>)}
+            <PanelsSuspended.Provider value={!!(panel || confirm || pasteWarning || busy)}>
+              <ToolPanel label={t('录入位置')} placement="bottom" initialOpen onDock={() => setBarMenu(null)}>
+                <div className="position-header">
+                  <div><small>{t('可直接点谱面，也可在这里选择。')}</small>
+                    {!!track?.voices?.length && <label>{t('编辑声部')}<select value={activeVoice} onChange={(event) =>
+                      selectBeat({ ...position, voice: Number(event.target.value), beat: 0 })}>
+                      <option value={0}>{t('主声部')}</option>
+                      {track.voices.map((voice, index) => <option value={index + 1} key={index}>{t('附加声部 {number}', { number: index + 1 })}
+                        {voice.staff === 1 ? ' · ' + t('下谱表') : ''}</option>)}
+                    </select></label>}
+                  </div>
+                  <div className="tool-actions" role="group" aria-label={t('小节编辑')}>
+                    <button disabled={project.measures.length >= 256 || project.measures[barIndex].simile === 'double'}
+                      title={project.measures[barIndex].simile === 'double' ? t('不能拆开两小节重复。') : undefined} onClick={() => {
+                      commit((score) => measuresChange(score, barIndex + 1, true)); selectBeat({ ...position, bar: barIndex + 1, beat: 0 })
+                    }}>{t('插入小节')}</button>
+                    <button title="Ctrl+C" onClick={() => copySelection()}>{t('复制小节')}</button>
+                    <button title="Ctrl+V" onClick={() => pasteSelection(measureSelection.length > 1 ? 'selection' : 'overwrite', measureSelection[0] ?? barIndex)}>{t('粘贴小节')}</button>
+                    <button disabled={!copied.current} onClick={() => pasteSelection('before')}>{t('在前面插入粘贴')}</button>
+                  </div>
+                </div>
+                <div className="measure-list" aria-label={t('选择小节')} {...measureDrag.handlers} onPointerDown={(event) => {
+                  const target = measureButton(eventElement(event.target))
+                  if (!target || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return
+                  selectMeasure(target, event)
+                  measureDrag.start(event, target)
+                }}>
+                  {project.measures.map((_, index) => {
+                    const difference = measureDifference(project, track!, index, activeVoice)
+                    const hint = difference ? t(difference > 0 ? '还差 {beats} 拍' : '超出 {beats} 拍', { beats: formatBeats(difference, language) }) : t('拍数完整')
+                    return <button key={index} data-measure-index={index} aria-label={t('第 {bar} 小节，{status}', { bar: index + 1, status: hint })}
+                      aria-pressed={measureSelection.includes(index)} data-current={index === barIndex} title={hint}
+                      onClick={(event) => {
+                        if (!event.detail || event.shiftKey || event.ctrlKey || event.metaKey) selectMeasure({ ...position, bar: index }, event)
+                      }} onContextMenu={(event) => showBarMenu({ ...position, bar: index }, event)}>
+                      {index + 1}<span aria-label={hint} className={difference < 0 ? 'over' : difference > 0 ? 'under' : 'full'}>●</span>
+                    </button>
+                  })}
+                </div>
+                {measureSelection.length > 0 && <small>{t('{track} · 所选小节 {bars}', { track: track!.name, bars: measureSelection.map((index) => index + 1).join(', ') })}</small>}
+                {track && measureDifference(project, track, barIndex, activeVoice) !== 0 && <p className={'measure-status ' + (measureDifference(project, track, barIndex, activeVoice) < 0 ? 'over' : 'under')}>
+                  {t('{track}第 {bar} 小节{status}', { track: track.name, bar: barIndex + 1,
+                    status: t(measureDifference(project, track, barIndex, activeVoice) > 0 ? '还差 {beats} 拍' : '超出 {beats} 拍',
+                      { beats: formatBeats(measureDifference(project, track, barIndex, activeVoice), language) }) })}
+                </p>}
+                {visible.map((item) => <div className="beat-row" key={item.id}><strong>{item.name}</strong><div>
+                  {beatList(project, voiceBars(item, item.id === position.track ? activeVoice : 0)[barIndex], barIndex).map((value, index) => <button key={index}
+                    aria-label={t('{track}位置 {beat}', { track: item.name, beat: index + 1 })} aria-pressed={item.id === position.track && index === position.beat}
+                    onClick={() => selectBeat({ track: item.id, bar: barIndex, beat: index, voice: item.id === position.track ? activeVoice : 0 })}>
+                    <small>{index + 1}</small><span>{value.draft ? '·' : value.notes.length ? value.notes.map((note) => note.string ? note.fret : pitchNames[note.midi % 12]).join('·') : t('休')}</span>
+                  </button>)}
+                </div></div>)}
+                <div className="tool-actions tool-actions-danger" role="group" aria-label={t('移除操作')}>
+                  <button disabled={project.measures.length <= 1} onClick={() => {
+                    commit((score) => measuresChange(score, barIndex, false)); selectBeat({ ...position, bar: Math.min(barIndex, project.measures.length - 2), beat: 0 })
+                  }}>{t('删除小节')}</button>
+                </div>
+              </ToolPanel>
+            </PanelsSuspended.Provider>
           </section>
         </section>
+        <PanelsSuspended.Provider value={!!(panel || confirm || pasteWarning || busy)}>
         {track && <Editor suspended={!!(panel || confirm || pasteWarning || barMenu)} score={project} track={track} position={position} mode={entryMode} beat={beat}
           edit={(edit) => commit((score) => changeBeat(score, position, edit))} putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} />}
+        </PanelsSuspended.Provider>
         {(panel || confirm || pasteWarning || barMenu) && <div className="inspector inspector-placeholder" aria-hidden="true" />}
       </main>}
       <footer className="status-bar"><span>{project ? (dirty ? '● ' + t('未保存') : '✓ ' + t('已保存')) : t('叶子弦谱 · 本地工作区')}</span>
         <span role="status">{audioState === 'loading' ? t('正在载入音色…') : notice ? displayMessage(t, notice) : t(project ? '乐谱与草稿保存在本机' : '选择模板，或打开已有工程')}</span></footer>
       {error && panel !== 'export' && <div role="alert" className="toast"><span>{displayMessage(t, error)}</span><button aria-label={t('关闭提示')} onClick={() => setError(null)}>×</button></div>}
     </div>
-    {barMenu && <div className="bar-menu-layer" onPointerDown={() => setBarMenu(null)} onKeyDown={(event) => { if (event.key === 'Escape') setBarMenu(null) }}>
+    {barMenu && createPortal(<div className="bar-menu-layer" onPointerDown={() => setBarMenu(null)} onKeyDown={(event) => { if (event.key === 'Escape') setBarMenu(null) }}>
       <div className="bar-menu" role="group" aria-label={t('小节操作')} style={{ left: barMenu.x, top: barMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
         <button autoFocus onClick={() => copySelection()}>{t('复制小节')}</button>
         {!activePart && <button onClick={() => copySelection(true)}>{t('复制整段总谱')}</button>}
@@ -717,7 +732,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         <button disabled={!copied.current} onClick={() => pasteSelection('after', barMenu.position.bar, pasteStructure)}>{t('在后面插入粘贴')}</button>
         {copied.current?.all && !activePart && <label className="checkbox"><input type="checkbox" checked={pasteStructure} onChange={(event) => setPasteStructure(event.target.checked)} />{t('包含结构记号')}</label>}
       </div>
-    </div>}
+    </div>, barMenu.document.body)}
     {pasteWarning && <Modal title={t('确认粘贴')} close={() => setPasteWarning(null)}>
       <p>{pasteWarning.text}</p>
       <div className="inline"><button className="primary" onClick={() => { setPasteWarning(null); pasteWarning.apply() }}>{t('继续粘贴')}</button>

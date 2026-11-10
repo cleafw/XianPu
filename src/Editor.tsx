@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useLanguage, type TextKey } from './i18n'
 import { NotationEditor } from './NotationEditor'
 import { ToolPanel } from './ToolPanel'
+import { eventElement, listenWorkspaceKeys } from './panelWindows'
 import type { SpanEnd } from './notationMarks'
 import { blank, durations, measureSettings, midiForDegree, pitchNames, previousBeat, matchingTie, staffAccidental, ticks, tonic, writtenKey, type Beat, type Duration, type Mode, type Position, type Project, type Track } from './model'
 
@@ -111,8 +112,9 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
   }
   useEffect(() => {
     function keyDown(event: KeyboardEvent) {
+      const target = eventElement(event.target)
       if (suspended || event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey ||
-        (event.target instanceof HTMLElement && (event.target.matches('input, textarea, select') || event.target.isContentEditable))) return
+        (target?.matches('input, textarea, select') || target?.isContentEditable)) return
       const key = event.key.toLowerCase()
       if (event.shiftKey && (key === 'arrowup' || key === 'arrowdown')) {
         event.preventDefault()
@@ -141,8 +143,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         putFret(fret)
       }
     }
-    window.addEventListener('keydown', keyDown)
-    return () => window.removeEventListener('keydown', keyDown)
+    return listenWorkspaceKeys(keyDown)
   })
   return <section className="inspector editor" hidden={suspended} aria-label={t('录入面板')}>
     <div className="inspector-head"><span className="eyebrow">{t('当前录入')}</span><strong>{track.name} · {t(percussion ? '打击乐谱' : tab ? '六线谱' : staff ? '五线谱' : '简谱')}</strong><small>{t('第 {bar} 小节 · 位置 {beat}', { bar: position.bar + 1, beat: position.beat + 1 })}</small></div>
@@ -201,8 +202,13 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         <button disabled={!current} onClick={() => changePitch(1)}>{t('升半音')}</button>
         <button disabled={!current} onClick={() => changePitch(-1)}>{t('降半音')}</button>
       </div>}
-      <div className="inline small-gap"><button onClick={rest}>{t('休止')}</button><button onClick={() => edit(() => blank())}>{t('清空')}</button>
-        <button onClick={previous}>{t('上一拍')}</button><button onClick={next}>{t('下一拍')}</button></div>
+      <div className="tool-actions"><button onClick={rest}>{t('休止')}</button></div>
+      <div className="tool-actions" role="group" aria-label={t('拍位导航')}>
+        <button onClick={previous}>{t('上一拍')}</button><button onClick={next}>{t('下一拍')}</button>
+      </div>
+      <div className="tool-actions tool-actions-danger" role="group" aria-label={t('移除操作')}>
+        <button disabled={!!beat.draft} onClick={() => edit(() => blank())}>{t('清空')}</button>
+      </div>
       </ToolPanel>
       <ToolPanel label={t('歌词与和弦')} initialOpen>
       {track.kind === 'voice' && <label>{t('歌词段落')}<select value={verse} onChange={(event) => setVerse(Number(event.target.value))}>
@@ -255,7 +261,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         </div>}
         {beat.grace?.map((midi, index) => <div className="inline small-gap" key={index}>
           <span>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</span>
-          <button onClick={() => edit((old) => ({ ...old, grace: old.grace?.filter((_, i) => i !== index) }))}>{t('移除倚音')}</button>
+          <button className="danger-action" onClick={() => edit((old) => ({ ...old, grace: old.grace?.filter((_, i) => i !== index) }))}>{t('移除倚音')}</button>
         </div>)}
         <div className="inline small-gap">
           <label>{t('连音个数')}<select value={ratio[0]} onChange={(event) => setRatio([Number(event.target.value), ratio[1]])}>
@@ -270,12 +276,14 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
             if (putTuplet(tupletStart, position, ratio)) { setTupletStart(null); setError('') }
             else setError('请在同一小节选择相应数量的音符或休止。')
           }}>{t('在这里结束')}</button>
+          <button onClick={() => setTupletStart(null)}>{t('取消起点')}</button>
+        </> : <button disabled={!!beat.draft} onClick={() => setTupletStart(position)}>{t('设置连音起点')}</button>}</div>
+        {tupletStart && <div className="tool-actions tool-actions-danger" role="group" aria-label={t('移除操作')}>
           <button onClick={() => {
             if (putTuplet(tupletStart, position)) { setTupletStart(null); setError('') }
             else setError('请在同一小节选择相应数量的音符或休止。')
           }}>{t('清除这组连音')}</button>
-          <button onClick={() => setTupletStart(null)}>{t('取消起点')}</button>
-        </> : <button disabled={!!beat.draft} onClick={() => setTupletStart(position)}>{t('设置连音起点')}</button>}</div>
+        </div>}
       </ToolPanel>
       <NotationEditor beat={beat} position={position} measures={score.measures} technique={track.technique ?? (track.kind === 'guitar' ? '吉他' : undefined)} guitarString={guitar ? current?.string : undefined} edit={edit} putSpan={putSpan} removeSpan={removeSpan} />
       {error && <p className="inline-error" role="alert">{t(error)}</p>}

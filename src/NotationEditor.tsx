@@ -70,7 +70,9 @@ export function NotationEditor({ beat, position, measures, technique, guitarStri
         {mark.code === 'text' && <label>{name('text')}<input value={mark.text ?? ''} maxLength={120}
           onChange={(event) => patch(mark.id, { text: event.target.value })} /></label>}
       </ToolPanel>
-      <button onClick={() => edit((old) => ({ ...old, marks: old.marks?.filter((item) => item.id !== mark.id) }))}>{t('删除记号')}</button>
+      <div className="tool-actions tool-actions-danger">
+        <button onClick={() => edit((old) => ({ ...old, marks: old.marks?.filter((item) => item.id !== mark.id) }))}>{t('删除记号')}</button>
+      </div>
     </div>)}
     <label>{t('跨音记号')}<select value={kind} onChange={(event) => setKind(event.target.value as SpanEnd['kind'])}>
       {spanKinds.map((item) => <option key={item} value={item}>{rangeName(item)}</option>)}
@@ -88,7 +90,7 @@ export function NotationEditor({ beat, position, measures, technique, guitarStri
     {beat.spans?.map((point) => <div className="notation-mark-item" key={point.id}>
       <span>{rangeName(point.kind)}{point.text ? ' · ' + point.text : ''}</span>
       <small>{t(spanHasPlayback(point.kind) ? '谱面＋试听' : '仅谱面')}</small>
-      <button onClick={() => removeSpan(point.id)}>{t('删除记号')}</button>
+      <div className="tool-actions tool-actions-danger"><button onClick={() => removeSpan(point.id)}>{t('删除记号')}</button></div>
     </div>)}
   </ToolPanel>
 }

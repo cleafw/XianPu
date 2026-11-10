@@ -3,8 +3,8 @@ import type { Position } from './model'
 
 type Point = { clientX: number; clientY: number }
 
-export function useMeasureDrag(hit: (point: Point) => Position | undefined, select?: (start: Position, end: number) => void) {
-  const drag = useRef<{ id: number; start: Position; end: number; point: Point; scroll: HTMLElement | null } | null>(null)
+export function useMeasureDrag(hit: (point: Point, doc: Document) => Position | undefined, select?: (start: Position, end: number) => void) {
+  const drag = useRef<{ id: number; start: Position; end: number; point: Point; scroll: HTMLElement | null; document: Document } | null>(null)
   const frame = useRef<number | null>(null)
   const callbacks = useRef({ hit, select })
   callbacks.current = { hit, select }
@@ -16,7 +16,7 @@ export function useMeasureDrag(hit: (point: Point) => Position | undefined, sele
   function update(point: Point) {
     const active = drag.current
     if (!active) return
-    const next = callbacks.current.hit(point)
+    const next = callbacks.current.hit(point, active.document)
     if (!next || next.bar === active.end) return
     active.end = next.bar
     callbacks.current.select?.(active.start, active.end)
@@ -46,7 +46,7 @@ export function useMeasureDrag(hit: (point: Point) => Position | undefined, sele
   return {
     start(event: PointerEvent<HTMLElement>, start: Position) {
       if (event.pointerType === 'touch') return
-      drag.current = { id: event.pointerId, start, end: start.bar, point: event, scroll: event.currentTarget.closest('.canvas') }
+      drag.current = { id: event.pointerId, start, end: start.bar, point: event, scroll: event.currentTarget.closest('.tool-popup, .canvas'), document: event.currentTarget.ownerDocument }
       event.currentTarget.setPointerCapture(event.pointerId)
     },
     handlers: {

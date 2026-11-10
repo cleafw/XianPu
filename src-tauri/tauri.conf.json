@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "叶子弦谱",
         "width": 1380,
         "height": 900,

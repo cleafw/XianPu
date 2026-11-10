@@ -5,6 +5,7 @@ import { parseProject } from '../src/model'
 test('drags measures, covers and inserts a copied range, and changes an existing octave', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await expect(page.locator('.score-cursor')).toBeVisible()
   const measures = page.getByRole('region', { name: '小节与录入位置' })
   const bar = (n: number) => measures.getByRole('button', { name: new RegExp('^第 ' + n + ' 小节') })
   const center = async (n: number) => {
