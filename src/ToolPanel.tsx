@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, u
 import { createPortal } from 'react-dom'
 import { isTauri } from '@tauri-apps/api/core'
 import { eventElement, openPanelWindow } from './panelWindows'
-import { useLanguage } from './i18n'
+import { appName, useLanguage } from './i18n'
 
 export const PanelsSuspended = createContext(false)
 
@@ -13,12 +13,41 @@ const clamp = (point: Point, width: number): Point => ({
   y: Math.max(8, Math.min(point.y, window.innerHeight - 90)),
 })
 
+export function PanelWidthHandle({ label, side, width, resize }: {
+  label: string; side: 'left' | 'right'; width: () => number; resize: (width: number) => void
+}) {
+  const drag = useRef<{ id: number; x: number; width: number } | null>(null)
+  const direction = side === 'left' ? -1 : 1
+  return <div className={'panel-width-handle panel-width-handle-' + side} role="separator" aria-orientation="vertical"
+    aria-label={label} title={label} tabIndex={0}
+    onPointerDown={(event) => {
+      if (event.button !== 0) return
+      drag.current = { id: event.pointerId, x: event.clientX, width: width() }
+      event.currentTarget.setPointerCapture(event.pointerId)
+      event.currentTarget.focus({ preventScroll: true })
+      event.preventDefault()
+    }}
+    onPointerMove={(event) => {
+      const start = drag.current
+      if (start?.id === event.pointerId) resize(start.width + (event.clientX - start.x) * direction)
+    }}
+    onLostPointerCapture={() => { drag.current = null }}
+    onKeyDown={(event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      event.preventDefault()
+      resize(width() + (event.key === 'ArrowLeft' ? -16 : 16) * direction)
+    }} />
+}
+
 export function ToolPanel({ label, hint, initialOpen = false, placement = 'sidebar', onDock, children }: {
   label: string; hint?: string; initialOpen?: boolean; placement?: 'sidebar' | 'bottom'; onDock?: () => void; children: ReactNode
 }) {
   const { t } = useLanguage()
+  const windowTitle = t(appName) + ' · ' + label
   const bottom = placement === 'bottom'
-  const width = bottom ? 620 : 325
+  const initialWidth = bottom ? 620 : 325
+  const [floatingWidth, setFloatingWidth] = useState<number>()
+  const width = floatingWidth ?? initialWidth
   const id = useId()
   const suspended = useContext(PanelsSuspended)
   const [host] = useState(() => document.createElement('div'))
@@ -52,10 +81,35 @@ export function ToolPanel({ label, hint, initialOpen = false, placement = 'sideb
   }, [host])
   useEffect(() => {
     if (detached) {
-      detached.title = label
+      detached.title = windowTitle
       detached.documentElement.lang = document.documentElement.lang
     }
-  }, [detached, label, t])
+  }, [detached, windowTitle, t])
+  useLayoutEffect(() => {
+    const panel = native.current
+    const content = box.current
+    if (!detached || !panel || !content) return
+    let previousHeight = 0
+    let previousWidth = 0
+    let frame = 0
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const bounds = content.getBoundingClientRect()
+        const height = Math.ceil(bounds.height)
+        if (height > 0 && (!previousHeight || (bounds.width === previousWidth && height !== previousHeight))) {
+          panel.fitHeight(height, windowTitle)
+        }
+        previousHeight = height
+        previousWidth = bounds.width
+      })
+    })
+    observer.observe(content)
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [detached, windowTitle])
 
   useEffect(() => {
     function resize() { setFloating((point) => point && clamp(point, box.current?.offsetWidth ?? width)) }
@@ -65,16 +119,21 @@ export function ToolPanel({ label, hint, initialOpen = false, placement = 'sideb
 
   function floatInPage() {
     const rect = dock.current?.getBoundingClientRect()
-    const available = Math.min(width, window.innerWidth - 16)
+    const available = Math.min(preferredWidth(), window.innerWidth - 16)
+    setFloatingWidth(available)
     setFloating(clamp({ x: rect ? rect.left - available - 12 : window.innerWidth - available - 20,
       y: rect ? Math.min(rect.top, window.innerHeight / 3) : 90 }, available))
     raise()
   }
 
+  function preferredWidth() {
+    return floatingWidth ?? Math.max(initialWidth, dock.current?.closest('.inspector')?.clientWidth ?? 0)
+  }
+
   function detach() {
     setFailed(false)
     if (!isTauri()) { floatInPage(); return }
-    const panel = openPanelWindow(label, width, bottom ? 450 : 520, () => {
+    const panel = openPanelWindow(windowTitle, Math.min(preferredWidth(), window.screen.availWidth), () => {
       dockSlot.current?.append(host)
       native.current = null
       setOpening(false)
@@ -129,7 +188,7 @@ export function ToolPanel({ label, hint, initialOpen = false, placement = 'sideb
     <div ref={dockSlot} />
     {createPortal(<div ref={box} className={floating ? 'tool-panel-window' : detached ? 'tool-panel-detached' : undefined}
       role={floating || detached ? 'region' : undefined} aria-label={floating || detached ? label : undefined}
-      style={floating ? { width: 'min(' + width + 'px, calc(100vw - 16px))', left: floating.x, top: floating.y, zIndex: order, maxHeight: 'min(70vh, calc(100vh - ' + (floating.y + 8) + 'px))' } : undefined}
+      style={floating ? { width: 'min(' + width + 'px, calc(100vw - 16px))', left: floating.x, top: floating.y, zIndex: order, maxHeight: 'calc(100vh - ' + (floating.y + 8) + 'px)' } : undefined}
       onPointerDownCapture={floating ? raise : undefined} onKeyDown={floating || detached ? (event) => {
         if (event.key === 'Escape') { event.stopPropagation(); returnToDock() }
       } : undefined}>
@@ -144,6 +203,9 @@ export function ToolPanel({ label, hint, initialOpen = false, placement = 'sideb
       </div>}
       {detached && suspended && <small className="tool-panel-warning">{t('请先处理主窗口的对话框。')}</small>}
       <div id={id} className="tool-panel-body" hidden={!show} inert={!!detached && suspended}>{children}</div>
+      {floating && <PanelWidthHandle label={t('调整{panel}宽度', { panel: label })} side="right"
+        width={() => box.current?.getBoundingClientRect().width ?? width}
+        resize={(next) => setFloatingWidth(Math.min(window.innerWidth - floating.x - 8, Math.max(225, next)))} />}
     </div>, host)}
   </section>
 }

@@ -1,4 +1,4 @@
-import { measureDifference, shiftedEndings, shiftedLayout, voiceBars, type Beat, type Measure, type Project } from './model.ts'
+import { measureDifference, shiftedEndings, shiftedIntro, shiftedLayout, voiceBars, type Beat, type Measure, type Project } from './model.ts'
 
 export type MeasureClipboard = {
   measures: Measure[]
@@ -126,7 +126,8 @@ export function pasteMeasures(project: Project, clip: MeasureClipboard, trackId:
     bars: pasteBars(track.bars, sources.get(key(track.id, 0))),
     voices: track.voices?.map((voice, index) => ({ ...voice, bars: pasteBars(voice.bars, sources.get(key(track.id, index + 1))) })),
   }))
-  const score = { ...project, measures, tracks, layout: inserting ? shiftedLayout(project.layout, start, length) : project.layout }
+  const score = { ...project, measures, tracks, intro: inserting ? shiftedIntro(project.intro, start, length) : project.intro,
+    layout: inserting ? shiftedLayout(project.layout, start, length) : project.layout }
   const overfull = measures.flatMap((_, index) => {
     const oldIndex = inserting && index >= start ? index - length : index
     const over = tracks.some((track, trackIndex) => [track.bars, ...track.voices?.map((voice) => voice.bars) ?? []].some((_, voice) => {

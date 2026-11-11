@@ -1,10 +1,37 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{io::{Read, Write}, path::{Path, PathBuf}};
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, webview::NewWindowResponse};
+use tauri::{Emitter, Manager, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, webview::NewWindowResponse};
+
+const MIN_TOOL_PANEL_HEIGHT: f64 = 90.0;
 
 fn io_error(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[tauri::command]
+fn fit_tool_panel(window: WebviewWindow, label: String, height: u32, title: String) -> Result<(), String> {
+    if window.label() != "main" || !label.starts_with("xianpu-panel-") {
+        return Err("无效的工具窗口。".into());
+    }
+    let Some(panel) = window.app_handle().get_webview_window(&label) else { return Ok(()) };
+    panel.set_title(&title).map_err(io_error)?;
+    let scale = panel.scale_factor().map_err(io_error)?;
+    let inner = panel.inner_size().map_err(io_error)?;
+    let minimum = (MIN_TOOL_PANEL_HEIGHT * scale).ceil() as u32;
+    let mut desired = ((f64::from(height) * scale).ceil() as u32).max(minimum);
+    if let Some(monitor) = panel.current_monitor().map_err(io_error)? {
+        let work = monitor.work_area();
+        let top = panel.outer_position().map_err(io_error)?.y.max(work.position.y);
+        let frame = panel.outer_size().map_err(io_error)?.height.saturating_sub(inner.height);
+        let available = i64::from(work.position.y) + i64::from(work.size.height)
+            - i64::from(top) - i64::from(frame);
+        desired = desired.min(available.max(i64::from(minimum)) as u32);
+    }
+    if desired != inner.height {
+        panel.set_size(PhysicalSize::new(inner.width, desired)).map_err(io_error)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -150,7 +177,8 @@ fn main() {
                     let result = WebviewWindowBuilder::new(&handle, label, WebviewUrl::External(url.clone()))
                         .window_features(features)
                         .title("叶子弦谱")
-                        .min_inner_size(255.0, 155.0)
+                        .min_inner_size(255.0, MIN_TOOL_PANEL_HEIGHT)
+                        .resizable(true)
                         .skip_taskbar(true)
                         .owner(&main)
                         .and_then(|builder| builder.build());
@@ -171,7 +199,7 @@ fn main() {
                 .build()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![read_project, read_midi, write_project, export_pdf, write_png, system_language, open_creator_page])
+        .invoke_handler(tauri::generate_handler![read_project, read_midi, write_project, export_pdf, write_png, system_language, open_creator_page, fit_tool_panel])
         .run(tauri::generate_context!())
-        .expect("could not start Yezi XianPu");
+        .expect("could not start Leaf Notation");
 }

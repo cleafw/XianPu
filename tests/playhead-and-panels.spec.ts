@@ -47,11 +47,14 @@ test('collapses controls and keeps independent draggable panels connected to the
   await page.goto('/')
   await page.getByRole('button', { name: '打开弹唱示例' }).click()
   const inspector = page.getByRole('region', { name: '录入面板' })
-  for (const panel of ['时值', '音高', '歌词与和弦', '连线与常用技巧']) {
+  for (const panel of ['时值', '音高']) {
     const toggle = inspector.getByRole('button', { name: panel, exact: true })
     await expect(toggle).toHaveAttribute('aria-expanded', 'true')
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  }
+  for (const panel of ['歌词与和弦', '连线与常用技巧', '倚音与成组连音', '记号面板']) {
+    await expect(inspector.getByRole('button', { name: panel, exact: true })).toHaveAttribute('aria-expanded', 'false')
   }
   await expect(inspector.getByRole('button', { name: '升八度', exact: true })).toHaveCount(0)
   await inspector.getByRole('button', { name: '弹出记号面板', exact: true }).click()
@@ -65,7 +68,7 @@ test('collapses controls and keeps independent draggable panels connected to the
   await page.mouse.up()
   await expect.poll(async () => (await marks.boundingBox())!.x).toBeLessThan(from.x - 150)
   await marks.getByRole('searchbox', { name: '搜索记号' }).fill('跳音')
-  await marks.getByRole('button', { name: '添加记号' }).click()
+  await marks.getByRole('button', { name: '跳音', exact: true }).click()
   await expect(page.locator('.canvas [data-code=staccato]')).toHaveCount(1)
   await inspector.getByRole('button', { name: '弹出倚音与成组连音', exact: true }).click()
   const ornaments = page.getByRole('region', { name: '倚音与成组连音', exact: true })
@@ -80,6 +83,54 @@ test('collapses controls and keeps independent draggable panels connected to the
   await expect(marks).toHaveCount(0)
   await inspector.getByRole('button', { name: '记号面板', exact: true }).click()
   await expect(inspector.getByRole('searchbox', { name: '搜索记号' })).toHaveValue('跳音')
+})
+
+test('reflows the mark palette when the sidebar, floating panel, and separate window get wider', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  const inspector = page.getByRole('region', { name: '录入面板' })
+  await inspector.getByRole('button', { name: '记号面板', exact: true }).click()
+  const columns = (scope: typeof inspector) => scope.getByRole('group', { name: '可用记号' }).evaluate((node) =>
+    getComputedStyle(node).gridTemplateColumns.split(' ').length)
+  const narrow = await columns(inspector)
+  const sidebarGrip = page.getByRole('separator', { name: '调整右侧栏宽度' })
+  const grip = (await sidebarGrip.boundingBox())!
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(grip.x - 245, grip.y + grip.height / 2, { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(() => columns(inspector)).toBeGreaterThan(narrow)
+  await inspector.getByRole('button', { name: '记号列表', exact: true }).click()
+  await expect.poll(() => columns(inspector)).toBeGreaterThan(1)
+  const list = inspector.getByRole('group', { name: '可用记号' })
+  const listSize = await list.evaluate((node) => ({ height: node.clientHeight, overflow: getComputedStyle(node).overflowY }))
+  expect(listSize.height).toBeGreaterThan(170)
+  expect(listSize.overflow).toBe('visible')
+
+  await inspector.getByRole('button', { name: '图标网格', exact: true }).click()
+  await inspector.getByRole('button', { name: '弹出记号面板', exact: true }).click()
+  const floating = page.getByRole('region', { name: '记号面板', exact: true })
+  const before = await columns(floating)
+  const floatingGrip = floating.getByRole('separator', { name: '调整记号面板宽度' })
+  const edge = (await floatingGrip.boundingBox())!
+  await page.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(edge.x + 190, edge.y + edge.height / 2, { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(() => columns(floating)).toBeGreaterThan(before)
+  await floating.getByRole('button', { name: '将记号面板贴回右栏' }).click()
+
+  await page.evaluate(() => Object.assign(window, { isTauri: true }))
+  const [popup] = await Promise.all([
+    page.waitForEvent('popup'),
+    inspector.getByRole('button', { name: '弹出记号面板', exact: true }).click(),
+  ])
+  const detached = popup.getByRole('region', { name: '记号面板', exact: true })
+  await popup.setViewportSize({ width: 325, height: 350 })
+  const detachedNarrow = await columns(detached)
+  await popup.setViewportSize({ width: 640, height: 650 })
+  await expect.poll(() => columns(detached)).toBeGreaterThan(detachedNarrow)
+  await popup.close()
 })
 
 test('moves the entry position into a separate document and keeps the score and shortcuts connected', async ({ page }) => {
@@ -97,6 +148,8 @@ test('moves the entry position into a separate document and keeps the score and 
     page.waitForEvent('popup'),
     page.getByRole('button', { name: '弹出录入位置' }).click(),
   ])
+  // The browser test has no native host to apply the requested window size.
+  await popup.setViewportSize({ width: 620, height: 450 })
   const entry = popup.getByRole('region', { name: '录入位置', exact: true })
   await expect(entry.getByRole('group', { name: '移除操作' }).getByRole('button', { name: '删除小节' })).toBeVisible()
   const second = entry.getByRole('button', { name: /^第 2 小节，/ })
@@ -121,4 +174,42 @@ test('moves the entry position into a separate document and keeps the score and 
   })
   await expect(page.getByRole('button', { name: '弹出录入位置' })).toBeVisible()
   await expect(page.getByRole('group', { name: '小节操作' })).toHaveCount(0)
+})
+
+test('fits each native panel to its own content and refits when the content changes', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await page.evaluate(() => {
+    const panelHeights: Record<string, number> = {}
+    Object.assign(window, {
+      isTauri: true, panelHeights,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: { label: string; height: number }) => {
+          if (command === 'fit_tool_panel') panelHeights[args.label] = args.height
+        },
+      },
+    })
+  })
+  const [popup] = await Promise.all([
+    page.waitForEvent('popup'),
+    page.getByRole('button', { name: '弹出倚音与成组连音', exact: true }).click(),
+  ])
+  const ornaments = popup.getByRole('region', { name: '倚音与成组连音', exact: true })
+  const label = await popup.evaluate(() => location.hash.slice(1))
+  const requestedHeight = () => page.evaluate((id) =>
+    (window as Window & { panelHeights: Record<string, number> }).panelHeights[id] ?? 0, label)
+  const contentHeight = () => ornaments.evaluate((panel) => Math.ceil(panel.getBoundingClientRect().height))
+  await expect(ornaments).toBeVisible()
+  await expect(popup).toHaveTitle('叶子弦谱 · 倚音与成组连音')
+  const initial = await contentHeight()
+  expect(initial).toBeLessThan(450)
+  await expect.poll(requestedHeight).toBe(initial)
+
+  await ornaments.getByRole('button', { name: '添加前倚音' }).click()
+  await expect(ornaments.getByRole('button', { name: '移除倚音' })).toBeVisible()
+  const expanded = await contentHeight()
+  expect(expanded).toBeGreaterThan(initial)
+  await expect.poll(requestedHeight).toBe(expanded)
+  await ornaments.getByRole('button', { name: '移除倚音' }).click()
+  await expect.poll(requestedHeight).toBe(initial)
 })

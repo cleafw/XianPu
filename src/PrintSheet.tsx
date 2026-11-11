@@ -3,6 +3,7 @@ import { ScoreView } from './ScoreView'
 import { useLanguage } from './i18n'
 import { paperFor, type Project } from './model'
 import { paperDimensions, paperMargin, pxPerMm } from './paper'
+import { createScoreWatermark } from './scoreWatermark'
 import type { CSSProperties } from 'react'
 
 const labelHeight = 28
@@ -22,16 +23,15 @@ export function PrintSheet({ project, part, onReady, onError }: {
     if (!source.current || !pages.current) return
     const surface = source.current.querySelector('.at-surface')
     const fragments = [...(surface?.querySelectorAll<SVGSVGElement>(':scope > div > svg') ?? [])]
-    if (!fragments.length || !systemCount || fragments.length <= systemCount) {
+    if (!systemCount || fragments.length < systemCount) {
       onError(new Error('无法为这份乐谱生成打印版面。'))
       return
     }
-    const hasFooter = fragments.at(-1)?.textContent?.includes('rendered by alphaTab')
-    const end = fragments.length - (hasFooter ? 1 : 0)
-    const firstSystem = end - systemCount
+    const firstSystem = fragments.length - systemCount
     pages.current.replaceChildren()
     let currentPage: HTMLDivElement
     let footer: HTMLDivElement | undefined
+    let watermark: SVGSVGElement | undefined
     let occupied = 0
     let systems = 0
     function newPage() {
@@ -49,23 +49,24 @@ export function PrintSheet({ project, part, onReady, onError }: {
         footer.textContent = layout.printFooter ?? ''
         currentPage.append(footer)
       }
+      watermark = createScoreWatermark(project)
+      if (watermark) currentPage.append(watermark)
       pages.current!.append(currentPage)
       occupied = labelHeight * (footer ? 2 : 1)
       systems = 0
     }
     newPage()
     for (const [index, svg] of fragments.entries()) {
-      const system = index >= firstSystem && index < end
+      const system = index >= firstSystem
       const height = svg.height.baseVal.value
-      const footerReserve = index === end - 1 && hasFooter ? fragments[end].height.baseVal.value : 0
-      if (system && systems && (systems >= limit || layout.pageBreaks?.includes(firstBars[index - firstSystem]) || occupied + height + footerReserve > contentHeight)) newPage()
+      if (system && systems && (systems >= limit || layout.pageBreaks?.includes(firstBars[index - firstSystem]) || occupied + height > contentHeight)) newPage()
       const copy = svg.cloneNode(true) as SVGSVGElement
-      const maxHeight = contentHeight - occupied - footerReserve
+      const maxHeight = contentHeight - occupied
       if (height > maxHeight && maxHeight > 30) {
         copy.setAttribute('viewBox', '0 0 ' + svg.width.baseVal.value + ' ' + height)
         copy.setAttribute('height', String(maxHeight))
       }
-      currentPage!.insertBefore(copy, footer ?? null)
+      currentPage!.insertBefore(copy, footer ?? watermark ?? null)
       occupied += Math.min(height, Math.max(maxHeight, 0))
       if (system) systems++
     }

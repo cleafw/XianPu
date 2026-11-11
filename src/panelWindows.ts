@@ -1,4 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 
 const keyboardHandlers = new Set<(event: KeyboardEvent) => void>()
 const windows = new Set<Window>()
@@ -18,10 +19,10 @@ export function eventElement(target: EventTarget | null): HTMLElement | null {
   return (target as Node | null)?.nodeType === 1 ? target as HTMLElement : null
 }
 
-export function openPanelWindow(title: string, width: number, height: number, onClosed: () => void) {
+export function openPanelWindow(title: string, width: number, onClosed: () => void) {
   const id = 'xianpu-panel-' + crypto.randomUUID()
   const opened = window.open('about:blank#' + id, id, [
-    'popup=yes', 'width=' + width, 'height=' + height,
+    'popup=yes', 'width=' + width, 'height=120',
     'left=' + (window.screenX + Math.max(24, window.outerWidth - width - 32)),
     'top=' + (window.screenY + 85),
   ].join(','))
@@ -76,5 +77,8 @@ export function openPanelWindow(title: string, width: number, height: number, on
     }
     prepare()
   })
-  return { popup, ready, close }
+  function fitHeight(height: number, title: string) {
+    if (!disposed && !popup.closed) void invoke('fit_tool_panel', { label: id, height, title }).catch(() => {})
+  }
+  return { popup, ready, close, fitHeight }
 }

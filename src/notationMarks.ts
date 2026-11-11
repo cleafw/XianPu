@@ -34,12 +34,14 @@ export const symbols = {
   tongue: ['竹笛', '单吐', 'Single tonguing', 'T'],
   doubleTongue: ['竹笛', '双吐', 'Double tonguing', 'TK'],
   tripleTongue: ['竹笛', '三吐', 'Triple tonguing', 'TTK'],
-  flutter: ['竹笛', '花舌', 'Flutter tongue', '花舌'],
+  flutter: ['竹笛', '花舌', 'Flutter tongue', '★'],
   fluteSlide: ['竹笛', '滑音', 'Flute slide', '滑'],
-  fluteDi: ['竹笛', '叠音', 'Overlapping grace', '叠'],
-  fluteDa: ['竹笛', '打音', 'Finger tap', '打'],
-  fluteZeng: ['竹笛', '赠音', 'Added grace', '赠'],
-  fluteTrill: ['竹笛', '指颤音', 'Finger trill', '颤'],
+  fluteSlideUp: ['竹笛', '上滑音', 'Flute slide up', '↗'],
+  fluteSlideDown: ['竹笛', '下滑音', 'Flute slide down', '↘'],
+  fluteDi: ['竹笛', '叠音', 'Overlapping grace', '又'],
+  fluteDa: ['竹笛', '打音', 'Finger tap', '丁'],
+  fluteZeng: ['竹笛', '赠音（尾音）', 'Trailing grace', '贝'],
+  fluteTrill: ['竹笛', '指颤音', 'Finger trill', 'tr'],
   tuo: ['古筝', '托', 'Thumb pluck', '托'],
   mo: ['古筝', '抹', 'Index pluck', '抹'],
   gou: ['古筝', '勾', 'Middle-finger pluck', '勾'],
@@ -141,9 +143,8 @@ export const articulation: Partial<Record<SymbolCode, { velocity?: number; gate?
 export const markHasPlayback = (code: ScoreMark['code']) =>
   Object.hasOwn(dynamics, code) || Object.hasOwn(articulation, code)
 export const spanHasPlayback = (kind: SpanKind) => kind === 'crescendo' || kind === 'diminuendo' || kind === 'palmMute'
-export const symbolText = (mark: ScoreMark) => mark.code === 'text' ? mark.text ?? '' : symbols[mark.code]?.[3] ?? ''
 export function defaultMarkPlace(code: ScoreMark['code']): ScoreMark['place'] {
-  if (code === 'breath' || code === 'caesura') return 'gap'
+  if (code === 'breath' || code === 'caesura' || code === 'fluteZeng' || code === 'fluteSlideDown') return 'gap'
   if (Object.hasOwn(dynamics, code) || code === 'fp' || code === 'sfz' || code === 'pedalDown' || code === 'pedalUp') return 'below'
   return 'above'
 }

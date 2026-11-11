@@ -10,8 +10,9 @@ type Entry = { duration: Duration; dots: Beat['dots']; triplet: boolean; octave:
 const initial: Entry = { duration: 4, dots: 0, triplet: false, octave: 0, string: 1 }
 const longValues = [{ duration: 4, dots: 0 }, { duration: 2, dots: 0 }, { duration: 2, dots: 1 }, { duration: 1, dots: 0 }] as const
 
-export function Editor({ score, track, position, mode, beat, edit, putSpan, removeSpan, putTuplet, next, previous, suspended = false }: {
+export function Editor({ score, track, position, mode, beat, edit, putSpan, removeSpan, putTuplet, next, previous, suspended = false, editDraftRest = false }: {
   score: Project; track: Track; position: Position; mode: Mode; beat: Beat;
+  editDraftRest?: boolean;
   edit: (fn: (b: Beat) => Beat) => void; putSpan: (from: Position, to: Position, span: SpanEnd) => boolean; removeSpan: (id: string) => void; putTuplet: (from: Position, to: Position, ratio?: [number, number]) => boolean; next: () => void; previous: () => void; suspended?: boolean
 }) {
   const { language, t } = useLanguage()
@@ -53,7 +54,10 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
       if (!beat.draft) setEntry((old) => ({ ...old, duration: beat.duration, dots: beat.dots, triplet: beat.triplet }))
     }
   }, [selectedKey, beat])
-  const rhythm = { duration: entry.duration, dots: entry.dots, triplet: entry.triplet }
+  const selectedDraftRest = editDraftRest && mode === 'numbered' && !!beat.draft
+  const selectedRest = mode === 'numbered' && !beat.notes.length && (!beat.draft || selectedDraftRest)
+  const { duration, dots, triplet } = selectedRest ? beat : entry
+  const rhythm = { duration, dots, triplet }
   function changePitch(amount: number) {
     if (!current) return
     if (percussion) return
@@ -106,16 +110,17 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
     return base + [0, 2, 4, 5, 7, 9, 11][degreeByLetter] + entry.octave * 12 + (entry.accidental ?? staffAccidental(name, keySignature))
   }
   function setRhythm(value: Partial<Pick<Entry, 'duration' | 'dots' | 'triplet'>>) {
-    setEntry((old) => ({ ...old, ...value }))
-    if (!beat.draft) edit((old) => ({ ...old, ...value }))
+    const updated = { ...rhythm, ...value }
+    setEntry((old) => ({ ...old, ...updated }))
+    if (!beat.draft || selectedDraftRest) edit((old) => ({ ...old, ...updated, draft: false }))
   }
   function stepRhythm(amount: number, long = false) {
     if (long) {
-      const index = longValues.findIndex((value) => value.duration === entry.duration && value.dots === entry.dots)
+      const index = longValues.findIndex((value) => value.duration === rhythm.duration && value.dots === rhythm.dots)
       const nextValue = longValues[index + amount]
       if (index >= 0 && nextValue) setRhythm(nextValue)
     } else {
-      const duration = durations[durations.indexOf(entry.duration) + amount]
+      const duration = durations[durations.indexOf(rhythm.duration) + amount]
       if (duration) setRhythm({ duration })
     }
   }
@@ -135,9 +140,6 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         event.preventDefault()
         if (key === 'arrowright') next()
         else previous()
-      } else if (key === 'delete') {
-        event.preventDefault()
-        edit(() => blank())
       } else if (!percussion && !tab && !staff && /^[0-7]$/.test(key)) {
         event.preventDefault()
         degree(Number(key))
@@ -156,21 +158,26 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
   })
   const notation = t(percussion ? '打击乐谱' : tab ? '吉他六线谱' : staff ? '五线谱' : '简谱')
   return <section className="inspector editor" hidden={suspended} aria-label={t('录入面板')}>
-    <div className="inspector-head"><span className="eyebrow">{t('当前录入')}</span><strong>{track.name === notation ? notation : track.name + ' · ' + notation}</strong><small>{t('第 {bar} 小节 · 位置 {beat}', { bar: position.bar + 1, beat: position.beat + 1 })}</small></div>
+    <div className="inspector-head">
+      <span className="eyebrow">{t('当前录入')}</span>
+      <strong>{track.name === notation ? notation : track.name + ' · ' + notation}</strong>
+      <small>{t('第 {bar} 小节 · 位置 {beat}', { bar: position.bar + 1, beat: position.beat + 1 })}</small>
+      {mode === 'numbered' && <button aria-pressed={stackNotes} onClick={() => setStackNotes(!stackNotes)}>{t('简谱叠音录入')}</button>}
+    </div>
     <div className="inspector-body">
       <ToolPanel label={t('时值')} initialOpen hint={t('{beats} 拍', { beats: new Intl.NumberFormat(language, { maximumFractionDigits: 2 })
         .format(ticks({ ...blank(), ...rhythm, tuplet: beat.tuplet }) / (3840 / measureSettings(score, position.bar).meter[1])) })}>
       <div className="button-grid rhythm">{durations.map((duration) =>
-        <button key={duration} aria-pressed={entry.duration === duration} onClick={() => setRhythm({ duration })}>{t(({ 1: '全音符', 2: '二分', 4: '四分', 8: '八分', 16: '十六分', 32: '三十二分', 64: '六十四分' } as const)[duration])}</button>)}</div>
-      <div className="inline small-gap"><button aria-pressed={entry.dots === 1} onClick={() => setRhythm({ dots: entry.dots === 1 ? 0 : 1 })}>{t('附点')}</button>
-      <button aria-pressed={entry.dots === 2} onClick={() => setRhythm({ dots: entry.dots === 2 ? 0 : 2 })}>{t('双附点')}</button>
-      <button disabled={!!beat.tuplet} aria-pressed={entry.triplet} onClick={() => setRhythm({ triplet: !entry.triplet })}>{t('三连音')}</button></div>
+        <button key={duration} aria-pressed={rhythm.duration === duration} onClick={() => setRhythm({ duration })}>{t(({ 1: '全音符', 2: '二分', 4: '四分', 8: '八分', 16: '十六分', 32: '三十二分', 64: '六十四分' } as const)[duration])}</button>)}</div>
+      <div className="inline small-gap"><button aria-pressed={rhythm.dots === 1} onClick={() => setRhythm({ dots: rhythm.dots === 1 ? 0 : 1 })}>{t('附点')}</button>
+      <button aria-pressed={rhythm.dots === 2} onClick={() => setRhythm({ dots: rhythm.dots === 2 ? 0 : 2 })}>{t('双附点')}</button>
+      <button disabled={!!beat.tuplet} aria-pressed={rhythm.triplet} onClick={() => setRhythm({ triplet: !rhythm.triplet })}>{t('三连音')}</button></div>
       <div className="inline small-gap">
-        <button title="[" disabled={entry.duration === 64} onClick={() => stepRhythm(1)}>{t(mode === 'numbered' ? '加减时线' : '缩短时值')}</button>
-        <button title="]" disabled={mode === 'numbered' ? entry.duration <= 4 : entry.duration === 1} onClick={() => stepRhythm(-1)}>{t(mode === 'numbered' ? '去减时线' : '延长时值')}</button>
+        <button title="[" disabled={rhythm.duration === 64} onClick={() => stepRhythm(1)}>{t(mode === 'numbered' ? '加减时线' : '缩短时值')}</button>
+        <button title="]" disabled={mode === 'numbered' ? rhythm.duration <= 4 : rhythm.duration === 1} onClick={() => stepRhythm(-1)}>{t(mode === 'numbered' ? '去减时线' : '延长时值')}</button>
         {mode === 'numbered' && <>
-          <button disabled={!longValues.some((value, i) => i < 3 && value.duration === entry.duration && value.dots === entry.dots)} onClick={() => stepRhythm(1, true)}>{t('加增时线')}</button>
-          <button disabled={!longValues.some((value, i) => i > 0 && value.duration === entry.duration && value.dots === entry.dots)} onClick={() => stepRhythm(-1, true)}>{t('去增时线')}</button>
+          <button disabled={!longValues.some((value, i) => i < 3 && value.duration === rhythm.duration && value.dots === rhythm.dots)} onClick={() => stepRhythm(1, true)}>{t('加增时线')}</button>
+          <button disabled={!longValues.some((value, i) => i > 0 && value.duration === rhythm.duration && value.dots === rhythm.dots)} onClick={() => stepRhythm(-1, true)}>{t('去增时线')}</button>
         </>}
       </div>
       </ToolPanel>
@@ -226,7 +233,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         <button disabled={!!beat.draft} onClick={() => edit(() => blank())}>{t('清空')}</button>
       </div>
       </ToolPanel>
-      <ToolPanel label={t('歌词与和弦')} initialOpen>
+      <ToolPanel label={t('歌词与和弦')}>
       {track.kind === 'voice' && <label>{t('歌词段落')}<select value={verse} onChange={(event) => setVerse(Number(event.target.value))}>
         {Array.from({ length: 5 }, (_, index) => <option key={index} value={index}>{t('第 {number} 段', { number: index + 1 })}</option>)}
       </select></label>}
@@ -243,7 +250,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
       <label>{t('和弦名')}<input maxLength={30} value={beat.chord ?? ''} placeholder={t('例如 Am')}
         onChange={(e) => edit((old) => ({ ...old, draft: false, chord: e.target.value }))} /></label>
       </ToolPanel>
-      <ToolPanel label={t('连线与常用技巧')} initialOpen>
+      <ToolPanel label={t('连线与常用技巧')}>
       <div className="inline small-gap">
         <button disabled={!validTie && !beat.tie} aria-pressed={!!beat.tie} onClick={() => edit((old) => ({ ...old, tie: !old.tie }))}>{t('接延音线')}</button>
         <button disabled={!beat.notes.length} aria-pressed={!!beat.slur} onClick={() => edit((old) => ({ ...old, slur: !old.slur }))}>{t('起连奏线')}</button>

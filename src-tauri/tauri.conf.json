@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "叶子弦谱",
+  "productName": "Leaf Notation",
   "version": "0.3.0",
   "identifier": "com.xianpu.score",
   "build": {

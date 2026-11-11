@@ -1,42 +1,9 @@
 import { model, type AlphaTabApi, type Settings } from '@coderline/alphatab'
-import type { Beat, Track } from './model'
-import { pairedSpans, symbolText, type ScoreMark, type SpanEnd, type SpanKind, type SymbolCode } from './notationMarks'
+import type { Beat, Project, Track } from './model'
+import { markSymbol } from './markGlyphs'
+import { pairedSpans, type ScoreMark, type SpanEnd, type SpanKind } from './notationMarks'
 
 const { MusicFontSymbol: smufl } = model
-const glyphs: Partial<Record<SymbolCode, number | readonly [number, number]>> = {
-  accent: [smufl.ArticAccentAbove, smufl.ArticAccentBelow],
-  staccato: [smufl.ArticStaccatoAbove, smufl.ArticStaccatoBelow],
-  staccatissimo: [0xe4a6, 0xe4a7],
-  tenuto: [smufl.ArticTenutoAbove, smufl.ArticTenutoBelow],
-  marcato: [smufl.ArticMarcatoAbove, smufl.ArticMarcatoBelow],
-  fermata: [smufl.FermataAbove, 0xe4c1],
-  breath: 0xe4ce,
-  caesura: 0xe4d1,
-  trill: smufl.OrnamentTrill,
-  mordent: smufl.OrnamentMordent,
-  turn: smufl.OrnamentTurn,
-  arpeggio: 0xeaa9,
-  ppp: smufl.DynamicPPP,
-  pp: smufl.DynamicPP,
-  p: smufl.DynamicPiano,
-  mp: smufl.DynamicMP,
-  mf: smufl.DynamicMF,
-  f: smufl.DynamicForte,
-  ff: smufl.DynamicFF,
-  fff: smufl.DynamicFFF,
-  sfz: smufl.DynamicSforzato,
-  fp: smufl.DynamicFortePiano,
-  downBow: smufl.StringsDownBow,
-  upBow: smufl.StringsUpBow,
-  bowTremolo: smufl.Tremolo3,
-  drumRoll: smufl.Tremolo3,
-  pedalDown: smufl.KeyboardPedalPed,
-  pedalUp: smufl.KeyboardPedalUp,
-  guitarHarmonic: 0xe614,
-  guitarStrumUp: 0xe846,
-  guitarStrumDown: 0xe847,
-}
-
 const belowSpan = (kind: SpanKind) => kind === 'crescendo' || kind === 'diminuendo' || kind === 'ottavaDown' || kind === 'pedal' || kind === 'lyricExtend'
 const svgNs = 'http://www.w3.org/2000/svg'
 const markLayer = 'xianpu-marks'
@@ -166,8 +133,7 @@ function pointMark(fragment: Fragment, anchor: Anchor, mark: ScoreMark, scale: n
   x += mark.dx * scale - fragment.x
   const edge = staff.y + (below ? staff.h : 0) - fragment.y
   const group = svg('g', { 'data-mark': mark.id, 'data-code': mark.code })
-  const glyph = mark.code === 'text' ? undefined : glyphs[mark.code]
-  const value = typeof glyph === 'number' ? glyph : glyph?.[below ? 1 : 0] ?? symbolText(mark)
+  const value = mark.code === 'text' ? mark.text ?? '' : markSymbol(mark.code, below)
   if (value === '') return
   const text = label(group, value, scale)
   fragment.group.append(group)
@@ -257,12 +223,35 @@ function rangeSegment(lane: Lane, span: SpanEnd, x1: number, x2: number, first: 
   group.setAttribute('transform', `translate(0 ${y})`)
 }
 
+function introParenthesis(fragment: Fragment, bar: StaffBar, opening: boolean, scale: number) {
+  const beat = opening ? bar.beats[0] : bar.beats.at(-1)
+  const heads = beat?.notes?.map(({ noteHeadBounds }) => noteHeadBounds) ?? []
+  const staff = bar.visualBounds
+  const notesX = beat?.onNotesX ?? staff.x + staff.w / 2
+  const edge = opening
+    ? Math.min(beat?.visualBounds.x ?? notesX - 5 * scale, ...heads.map(({ x }) => x))
+    : Math.max(notesX + 5 * scale, ...heads.map(({ x, w }) => x + w))
+  const x = Math.max(staff.x + 7 * scale, Math.min(staff.x + staff.w - 7 * scale, edge + (opening ? -2 : 2) * scale)) - fragment.x
+  const center = staff.y + staff.h / 2
+  const top = Math.max(2, Math.min(center - 9 * scale, ...heads.map(({ y }) => y - 3 * scale)) - fragment.y)
+  const bottom = Math.min(fragment.height - 2, Math.max(center + 9 * scale, ...heads.map(({ y, h }) => y + h + 3 * scale)) - fragment.y)
+  const curve = x + (opening ? -6 : 6) * scale
+  const height = bottom - top
+  fragment.group.append(svg('path', {
+    'data-intro-parenthesis': opening ? 'start' : 'end',
+    'data-intro-track': bar.bar.staff.track.index,
+    d: `M ${x} ${top} C ${curve} ${top + height / 4} ${curve} ${bottom - height / 4} ${x} ${bottom}`,
+    fill: 'none', stroke: '#171717', 'stroke-width': 1.4 * scale, 'stroke-linecap': 'round',
+  }))
+}
+
 /** Add cloneable SVG to alphaTab's rendered system fragments before pagination. */
-export function engraveMarks(element: HTMLElement, lookup: Lookup | null, tracks: readonly Track[], scale: number, sourceData: (beat: BeatBounds['beat']) => Beat | undefined) {
+export function engraveMarks(element: HTMLElement, lookup: Lookup | null, tracks: readonly Track[], scale: number,
+  sourceData: (beat: BeatBounds['beat']) => Beat | undefined, intro?: Project['intro']) {
   const surface = element.querySelector('.at-surface')
   if (!surface || !lookup) return
   surface.querySelectorAll(`.${markLayer}`).forEach((layer) => layer.remove())
-  if (!tracks.some((track) => [track.bars, ...track.voices?.map((voice) => voice.bars) ?? []].some((bars) =>
+  if (!intro && !tracks.some((track) => [track.bars, ...track.voices?.map((voice) => voice.bars) ?? []].some((bars) =>
     bars.some((bar) => bar.some((beat) => beat.marks?.length || beat.spans?.length))))) return
 
   const fragments = new Map<number, Fragment>()
@@ -283,6 +272,18 @@ export function engraveMarks(element: HTMLElement, lookup: Lookup | null, tracks
     const fragment = [...fragments.values()].find(({ y, height }) => top >= y && top < y + height)
     if (!fragment) continue
     for (const master of system.bars) {
+      if (intro && (master.index === intro[0] || master.index === intro[1])) {
+        const firstStaffByTrack = new Map<number, StaffBar>()
+        for (const staff of master.bars) {
+          const track = staff.bar.staff.track.index
+          const first = firstStaffByTrack.get(track)
+          if (!first || staff.realBounds.y < first.realBounds.y) firstStaffByTrack.set(track, staff)
+        }
+        for (const staff of firstStaffByTrack.values()) {
+          if (master.index === intro[0]) introParenthesis(fragment, staff, true, scale)
+          if (master.index === intro[1]) introParenthesis(fragment, staff, false, scale)
+        }
+      }
       for (const modelBar of new Set(master.bars.map(({ bar }) => bar))) {
         const bars = master.bars.filter(({ bar }) => bar === modelBar)
           .sort((a, b) => a.realBounds.y - b.realBounds.y)

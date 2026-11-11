@@ -17,8 +17,13 @@ type NoteGlyph = BeatGlyph & {
   getHighestNoteY(position: number): number
   buildBoundingsLookup(bounds: rendering.BeatBounds, cx: number, cy: number): void
 }
-type BeatContainer = { beat?: model.Beat; preNotes?: BeatGlyph & { skipLayout: boolean }; onNotes?: NoteGlyph }
-type BarRenderer = { addBeatGlyph(container: BeatContainer): void }
+type BeatContainer = { beat?: model.Beat; preNotes?: BeatGlyph & { skipLayout: boolean }; onNotes?: NoteGlyph; barCount?: number }
+type BarRenderer = {
+  addBeatGlyph(container: BeatContainer): void
+  shouldPaintBeamingHelper(helper: { isRestBeamHelper: boolean }): boolean
+  beamSpacing: number
+  beamThickness: number
+}
 type NumberedFactory = { staffId: string; create(renderer: unknown, bar: model.Bar): BarRenderer }
 
 const appScores = new WeakSet<model.Score>()
@@ -37,6 +42,7 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
   const layoutPre = pre.doLayout.bind(pre)
   const paintPre = pre.paint.bind(pre)
   let basePreWidth = 0
+  let baseShift = 0
   pre.doLayout = () => {
     layoutPre()
     basePreWidth = pre.width
@@ -50,7 +56,7 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
     pre.computedWidth = pre.width
   }
   pre.paint = (cx, cy, canvas) => {
-    paintPre(cx + pre.width - basePreWidth, cy, canvas)
+    paintPre(cx + pre.width - basePreWidth, cy + baseShift, canvas)
     if (!pre.skipLayout) for (const row of extras) {
       row.pre.paint(cx + pre.x + pre.width - row.pre.width, cy + pre.y + row.y, canvas)
     }
@@ -59,11 +65,15 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
   const layoutNotes = on.doLayout.bind(on)
   const paintNotes = on.paint.bind(on)
   const top = on.getBoundingBoxTop.bind(on)
+  const bottom = on.getBoundingBoxBottom.bind(on)
   const noteY = on.getNoteY.bind(on)
   const buildBounds = on.buildBoundingsLookup.bind(on)
   on.doLayout = () => {
     layoutNotes()
-    let upperEdge = on.noteHeads?.getBoundingBoxTop() ?? 0
+    const base = on.noteHeads
+    baseShift = 0
+    if (!base) return
+    let upperEdge = base.getBoundingBoxTop()
     for (const row of extras) {
       row.on.renderer = on.renderer
       row.on.container = container
@@ -73,6 +83,10 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
       row.y = upperEdge - head.getBoundingBoxBottom() - 3
       upperEdge = row.y + head.getBoundingBoxTop()
     }
+    // Put the center of the entire stack on the normal numbered-note baseline.
+    baseShift = base.y - (upperEdge + base.getBoundingBoxBottom()) / 2
+    base.y += baseShift
+    for (const row of extras) row.y += baseShift
   }
   on.paint = (cx, cy, canvas) => {
     paintNotes(cx, cy, canvas)
@@ -83,7 +97,11 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
       withNote(notes, row.note, () => head.paint(cx + on.x + x, cy + on.y + row.y, canvas))
     }
   }
-  on.getBoundingBoxTop = () => extras.at(-1)!.y + (extras.at(-1)!.on.noteHeads?.getBoundingBoxTop() ?? top())
+  on.getBoundingBoxTop = () => {
+    const upper = extras.at(-1)!
+    return upper.on.noteHeads ? Math.min(top(), upper.y + upper.on.noteHeads.getBoundingBoxTop()) : top()
+  }
+  on.getBoundingBoxBottom = () => Math.max(bottom(), on.noteHeads?.getBoundingBoxBottom() ?? 0)
   on.getNoteY = (note, position) => {
     const row = extras.find((item) => item.note === note)
     return row ? on.y + row.y + row.on.getNoteY(note, position) : noteY(note, position)
@@ -107,7 +125,24 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
   }
 }
 
-export function enableNumberedStacks(score: model.Score) {
+function underlineRest(renderer: BarRenderer, glyph: NoteGlyph, lines: number) {
+  const spacing = renderer.beamSpacing + renderer.beamThickness
+  const paint = glyph.paint.bind(glyph)
+  const bottom = glyph.getBoundingBoxBottom.bind(glyph)
+  glyph.getBoundingBoxBottom = () => bottom() + 2 + lines * spacing
+  glyph.paint = (cx, cy, canvas) => {
+    paint(cx, cy, canvas)
+    const head = glyph.noteHeads
+    if (!head) return
+    const x = cx + glyph.x + head.x
+    const y = cy + glyph.y + head.getBoundingBoxBottom() + 2
+    for (let line = 0; line < lines; line++) {
+      canvas.fillRect(x, y + line * spacing, head.width, renderer.beamThickness)
+    }
+  }
+}
+
+export function enableNumberedNotation(score: model.Score) {
   appScores.add(score)
   if (installed) return
   const factories = (Environment as unknown as { defaultRenderers: NumberedFactory[] }).defaultRenderers
@@ -118,10 +153,18 @@ export function enableNumberedStacks(score: model.Score) {
   numbered.create = (renderer, bar) => {
     const result = create(renderer, bar)
     if (!appScores.has(bar.staff.track.score)) return result
+    // A rest-only beam has no highest note for alphaTab's overflow calculation.
+    // Short rests draw their duration underlines with the zero glyph instead.
+    const shouldPaint = result.shouldPaintBeamingHelper.bind(result)
+    result.shouldPaintBeamingHelper = (helper) => !helper.isRestBeamHelper && shouldPaint(helper)
     const add = result.addBeatGlyph.bind(result)
     result.addBeatGlyph = (container) => {
-      const { beat, preNotes, onNotes } = container
+      const { beat, preNotes, onNotes, barCount } = container
       if (beat && beat.notes.length > 1 && preNotes && onNotes) stack(container, beat.notes, preNotes, onNotes)
+      if (beat?.isRest && !beat.isEmpty && onNotes) {
+        const lines = barCount ?? Math.log2(beat.duration / 4)
+        if (lines > 0) underlineRest(result, onNotes, lines)
+      }
       add(container)
     }
     return result

@@ -1,5 +1,5 @@
 import { AlphaTabApi, midi, PlayerMode, PlayerOutputMode, type synth } from '@coderline/alphatab'
-import { beatList, capacity, ticks, voiceBars, type Beat, type Position, type Project, type Tone } from './model'
+import { beatList, capacity, measureSettings, ticks, voiceBars, type Beat, type Meter, type Position, type Project, type Tone } from './model'
 import { articulation, dynamics, pairedSpans } from './notationMarks'
 import { scoreSettings } from './score'
 import { resolveScoreNavigation } from './scoreNavigation'
@@ -161,6 +161,7 @@ function buildPlayback(project: Project, part: string | null, follow?: Position)
   file.division = 960
   let start = 0
   let tempo = 0
+  let previousMeter: Meter | undefined
   let previousBar = -1
   let section = 0
   const entranceTempo = new Map<number, number>()
@@ -170,6 +171,11 @@ function buildPlayback(project: Project, part: string | null, follow?: Position)
     if (index !== previousBar + 1 && !skippedFirstEnding) section++
     const source = sourceBars[index]
     if (source !== index && capacity(project, source) !== capacity(project, index)) throw new Error('小节重复的原小节和目标小节拍数不同。')
+    const meter = measureSettings(project, index).meter
+    if (meter[0] !== previousMeter?.[0] || meter[1] !== previousMeter[1]) {
+      file.addEvent(new midi.TimeSignatureEvent(0, start, meter[0], Math.log2(meter[1]), 96 / meter[1], 8))
+      previousMeter = meter
+    }
     const bpm = project.measures[index].bpm ?? (rewind ? entranceTempo.get(index) : undefined) ?? (tempo || project.bpm)
     if (!entranceTempo.has(index)) entranceTempo.set(index, bpm)
     if (tempo !== bpm) file.addEvent(new midi.TempoChangeEvent(start, Math.round(60_000_000 / bpm)))

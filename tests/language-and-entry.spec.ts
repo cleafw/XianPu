@@ -52,7 +52,7 @@ test.describe('a system using another language', () => {
   test.use({ locale: 'ja-JP' })
   test('falls back to English and persists a manual override without losing score edits', async ({ page }) => {
     await page.goto('/')
-    await expect(page).toHaveTitle('Yezi XianPu')
+    await expect(page).toHaveTitle('Leaf Notation')
     await expect(page.getByRole('heading', { name: 'Start with the first bar' })).toBeVisible()
     await expect(page.getByLabel('Language')).toHaveValue('system')
     await page.getByRole('button', { name: /Voice & Guitar/ }).click()
@@ -71,6 +71,6 @@ test.describe('a system using another language', () => {
     await expect(page.getByRole('dialog').locator('.sheet-label')).toHaveText('Full Score · 1')
     await page.getByRole('button', { name: 'Close', exact: true }).click()
     await page.getByLabel('Language').selectOption('system')
-    await expect(page).toHaveTitle('Yezi XianPu')
+    await expect(page).toHaveTitle('Leaf Notation')
   })
 })

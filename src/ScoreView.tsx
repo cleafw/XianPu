@@ -7,6 +7,7 @@ import type { Mode, Position, Project, Track } from './model'
 
 type MasterBar = NonNullable<ReturnType<NonNullable<AlphaTabApi['boundsLookup']>['findMasterBarByIndex']>>
 type StaffBar = MasterBar['bars'][number]
+type ScoreScroll = { part: string | null; top: number; left: number }
 
 function voiceIndices(track: Track, mode: Mode | undefined, staff: number) {
   const extras = (track.voices ?? []).flatMap((voice, index) => mode !== 'piano' || (voice.staff ?? 0) === staff ? [index + 1] : [])
@@ -29,6 +30,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
   const cursor = useRef<HTMLDivElement>(null)
   const highlights = useRef<HTMLDivElement>(null)
   const apiRef = useRef<AlphaTabApi | null>(null)
+  const pendingScroll = useRef<ScoreScroll | null>(null)
   const callbacks = useRef({ onReady, onError, position, playhead, selectedBars })
   callbacks.current = { onReady, onError, position, playhead, selectedBars }
 
@@ -131,16 +133,42 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
 
   useEffect(() => {
     const element = container.current!
+    const viewport = print ? null : element.closest<HTMLElement>('.canvas')
+    const paper = print ? null : element.closest<HTMLElement>('.paper-scroll')
+    let scroll = pendingScroll.current?.part === part ? pendingScroll.current : null
+    pendingScroll.current = null
+    if (!scroll) element.style.minHeight = ''
+    function restoreScroll() {
+      if (!scroll) return
+      element.style.minHeight = ''
+      if (viewport) viewport.scrollTop = scroll.top
+      if (paper) paper.scrollLeft = scroll.left
+      scroll = null
+    }
+    function reportError(error: Error) {
+      restoreScroll()
+      callbacks.current.onError?.(error)
+    }
     try {
       const api = drawScore(element, project, part, scale, language, () => {
+        restoreScroll()
         const systems = apiRef.current?.boundsLookup?.staffSystems ?? []
         callbacks.current.onReady?.(systems.length, systems.map((system) => system.bars[0]?.index ?? 0))
         markPosition()
-      }, (error) => callbacks.current.onError?.(error), print)
+      }, reportError, print)
       apiRef.current = api
-      return () => { apiRef.current = null; api.destroy(); element.replaceChildren() }
+      return () => {
+        if (viewport && paper) {
+          pendingScroll.current = { part, top: viewport.scrollTop, left: paper.scrollLeft }
+          // Keep the scrollable area in place while alphaTab replaces its SVG.
+          element.style.minHeight = element.offsetHeight + 'px'
+        }
+        apiRef.current = null
+        api.destroy()
+        element.replaceChildren()
+      }
     } catch (error) {
-      callbacks.current.onError?.(error instanceof Error ? error : new Error(String(error)))
+      reportError(error instanceof Error ? error : new Error(String(error)))
     }
   }, [project, part, scale, language, print])
   useEffect(markPosition, [position, playhead, selectedBars])

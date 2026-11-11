@@ -1,10 +1,11 @@
 import { AlphaTabApi, FontFileFormat, model, NotationElement, Settings, SystemsLayoutMode } from '@coderline/alphatab'
 import { translate, type Language } from './i18n'
 import { engraveMarks, reserveMarkSpace } from './engraveMarks'
+import { createScoreWatermark } from './scoreWatermark'
 import bravura from '@coderline/alphatab/font/Bravura.woff2?url'
 import { beatList, guitarTuning, measureSettings, writtenKey, type Beat, type Project } from './model'
 import { resolveScoreNavigation, type NavigationDirection } from './scoreNavigation'
-import { alignBarColumns, enableNumberedStacks } from './scoreRendering'
+import { alignBarColumns, enableNumberedNotation } from './scoreRendering'
 
 export function scoreSettings() {
   const settings = new Settings()
@@ -241,20 +242,28 @@ export function drawScore(element: HTMLElement, project: Project, part: string |
   const settings = scoreSettings()
   settings.display.scale = scale
   const { score, tracks } = buildScore(project, part, settings, language)
-  if (print && part && tracks[0]?.layout.compressRests && !tracks[0].layout.pageBreaks?.length && !tracks[0].layout.systemBreaks?.length && !project.measures.some((measure) => measure.simile || measure.rehearsal || measure.directions?.length) &&
+  if (print && part && !project.intro && tracks[0]?.layout.compressRests && !tracks[0].layout.pageBreaks?.length && !tracks[0].layout.systemBreaks?.length && !project.measures.some((measure) => measure.simile || measure.rehearsal || measure.directions?.length) &&
     ![tracks[0].bars, ...tracks[0].voices?.map((voice) => voice.bars) ?? []].some((bars) =>
       bars.some((bar) => bar.some((beat) => !beat.notes.length && (beat.marks?.length || beat.spans?.length || beat.lyric || beat.verses?.some(Boolean) || beat.chord || beat.diagram))))) {
     score.stylesheet.perTrackMultiBarRest = new Set([0])
   }
   reserveMarkSpace(settings, tracks)
   const api = new AlphaTabApi(element, settings)
-  enableNumberedStacks(score)
+  enableNumberedNotation(score)
   if (!score.stylesheet.perTrackMultiBarRest?.size) {
     alignBarColumns(api, (part ? tracks[0]?.layout ?? project.layout : project.layout).barsPerLine)
   }
   api.error.on((error) => onError?.(error instanceof Error ? error : new Error(String(error))))
   api.postRenderFinished.on(() => {
-    engraveMarks(element, api.boundsLookup, tracks, scale, (beat) => sourceIndexes.get(beat)?.data)
+    const footer = element.querySelector('.at-surface > div:last-child > svg')
+    // Leave alphaTab's layout placeholder in place for subsequent resizes.
+    if (footer?.textContent?.trim() === 'rendered by alphaTab') footer.remove()
+    engraveMarks(element, api.boundsLookup, tracks, scale, (beat) => sourceIndexes.get(beat)?.data, project.intro)
+    if (!print) {
+      element.querySelector(':scope > .score-watermark')?.remove()
+      const watermark = createScoreWatermark(project)
+      if (watermark) element.append(watermark)
+    }
     onReady?.()
   })
   api.renderScore(score, score.tracks.map((track) => track.index))
