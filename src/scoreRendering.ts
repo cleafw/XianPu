@@ -1,4 +1,5 @@
 import { Environment, rendering, type AlphaTabApi, type model, type platform } from '@coderline/alphatab'
+import type { IntroRange } from './model'
 
 // This adapter is for the renderer objects in the pinned alphaTab version.
 type Glyph = {
@@ -19,14 +20,24 @@ type NoteGlyph = BeatGlyph & {
 }
 type BeatContainer = { beat?: model.Beat; preNotes?: BeatGlyph & { skipLayout: boolean }; onNotes?: NoteGlyph; barCount?: number }
 type BarRenderer = {
+  width: number
+  beatGlyphsStart: number
+  postBeatGlyphsStart: number
+  _preBeatGlyphs: { width: number }
+  _postBeatGlyphs: Pick<Glyph, 'width' | 'paint'>
+  createPreBeatGlyphs(): void
+  createPostBeatGlyphs(): void
+  buildBoundingsLookup(master: rendering.MasterBarBounds, cx: number, cy: number): void
   addBeatGlyph(container: BeatContainer): void
   shouldPaintBeamingHelper(helper: { isRestBeamHelper: boolean }): boolean
   beamSpacing: number
   beamThickness: number
 }
-type NumberedFactory = { staffId: string; create(renderer: unknown, bar: model.Bar): BarRenderer }
+type RendererFactory = { staffId: string; create(renderer: unknown, bar: model.Bar): BarRenderer }
 
-const appScores = new WeakSet<model.Score>()
+const appScores = new WeakMap<model.Score, IntroRange | undefined>()
+const introBounds = new WeakMap<rendering.BarBounds, { width: number; start: number; end: number }>()
+const introPadding = 14
 let installed = false
 
 function withNote<T>(notes: model.Note[], note: model.Note, action: () => T): T {
@@ -142,32 +153,76 @@ function underlineRest(renderer: BarRenderer, glyph: NoteGlyph, lines: number) {
   }
 }
 
-export function enableNumberedNotation(score: model.Score) {
-  appScores.add(score)
-  if (installed) return
-  const factories = (Environment as unknown as { defaultRenderers: NumberedFactory[] }).defaultRenderers
-  const numbered = factories.find((factory) => factory.staffId === 'numbered')
-  if (!numbered) return
-  installed = true
-  const create = numbered.create.bind(numbered)
-  numbered.create = (renderer, bar) => {
-    const result = create(renderer, bar)
-    if (!appScores.has(bar.staff.track.score)) return result
-    // A rest-only beam has no highest note for alphaTab's overflow calculation.
-    // Short rests draw their duration underlines with the zero glyph instead.
-    const shouldPaint = result.shouldPaintBeamingHelper.bind(result)
-    result.shouldPaintBeamingHelper = (helper) => !helper.isRestBeamHelper && shouldPaint(helper)
-    const add = result.addBeatGlyph.bind(result)
-    result.addBeatGlyph = (container) => {
-      const { beat, preNotes, onNotes, barCount } = container
-      if (beat && beat.notes.length > 1 && preNotes && onNotes) stack(container, beat.notes, preNotes, onNotes)
-      if (beat?.isRest && !beat.isEmpty && onNotes) {
-        const lines = barCount ?? Math.log2(beat.duration / 4)
-        if (lines > 0) underlineRest(result, onNotes, lines)
-      }
-      add(container)
+function reserveIntroPadding(renderer: BarRenderer, opening: boolean, closing: boolean) {
+  if (opening) {
+    const create = renderer.createPreBeatGlyphs.bind(renderer)
+    renderer.createPreBeatGlyphs = () => {
+      create()
+      renderer._preBeatGlyphs.width += introPadding
     }
-    return result
+  }
+  if (closing) {
+    const create = renderer.createPostBeatGlyphs.bind(renderer)
+    renderer.createPostBeatGlyphs = () => {
+      create()
+      // Place the whole barline, including repeat dots, after the parenthesis.
+      const glyphs = renderer._postBeatGlyphs
+      const paint = glyphs.paint.bind(glyphs)
+      glyphs.width += introPadding
+      glyphs.paint = (cx, cy, canvas) => paint(cx + introPadding, cy, canvas)
+    }
+  }
+  const build = renderer.buildBoundingsLookup.bind(renderer)
+  renderer.buildBoundingsLookup = (master, cx, cy) => {
+    const first = master.bars.length
+    build(master, cx, cy)
+    for (const bounds of master.bars.slice(first)) {
+      introBounds.set(bounds, { width: renderer.width, start: renderer.beatGlyphsStart, end: renderer.postBeatGlyphsStart })
+    }
+  }
+}
+
+export function introContentEdges(bar: rendering.BarBounds) {
+  const bounds = introBounds.get(bar)
+  if (!bounds?.width) return
+  const { x, w } = bar.realBounds
+  return { start: x + bounds.start * w / bounds.width, end: x + bounds.end * w / bounds.width }
+}
+
+export function enableScoreRendering(score: model.Score, intro?: IntroRange) {
+  appScores.set(score, intro)
+  if (installed) return
+  const factories = (Environment as unknown as { defaultRenderers: RendererFactory[] }).defaultRenderers
+  installed = true
+  for (const factory of factories) {
+    const create = factory.create.bind(factory)
+    factory.create = (renderer, bar) => {
+      const result = create(renderer, bar)
+      if (!appScores.has(bar.staff.track.score)) return result
+      const range = appScores.get(bar.staff.track.score)
+      if (range && (bar.index === range[0] || bar.index === range[1])) {
+        reserveIntroPadding(result, bar.index === range[0], bar.index === range[1])
+      }
+      if (factory.staffId === 'numbered') patchNumberedNotation(result)
+      return result
+    }
+  }
+}
+
+function patchNumberedNotation(result: BarRenderer) {
+  // A rest-only beam has no highest note for alphaTab's overflow calculation.
+  // Short rests draw their duration underlines with the zero glyph instead.
+  const shouldPaint = result.shouldPaintBeamingHelper.bind(result)
+  result.shouldPaintBeamingHelper = (helper) => !helper.isRestBeamHelper && shouldPaint(helper)
+  const add = result.addBeatGlyph.bind(result)
+  result.addBeatGlyph = (container) => {
+    const { beat, preNotes, onNotes, barCount } = container
+    if (beat && beat.notes.length > 1 && preNotes && onNotes) stack(container, beat.notes, preNotes, onNotes)
+    if (beat?.isRest && !beat.isEmpty && onNotes) {
+      const lines = barCount ?? Math.log2(beat.duration / 4)
+      if (lines > 0) underlineRest(result, onNotes, lines)
+    }
+    add(container)
   }
 }
 

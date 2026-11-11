@@ -5,7 +5,7 @@ import { createScoreWatermark } from './scoreWatermark'
 import bravura from '@coderline/alphatab/font/Bravura.woff2?url'
 import { beatList, guitarTuning, measureSettings, writtenKey, type Beat, type Project } from './model'
 import { resolveScoreNavigation, type NavigationDirection } from './scoreNavigation'
-import { alignBarColumns, enableNumberedNotation } from './scoreRendering'
+import { alignBarColumns, enableScoreRendering } from './scoreRendering'
 
 export function scoreSettings() {
   const settings = new Settings()
@@ -250,7 +250,7 @@ export function drawScore(element: HTMLElement, project: Project, part: string |
   }
   reserveMarkSpace(settings, tracks, project.layout.numberedKey)
   const api = new AlphaTabApi(element, settings)
-  enableNumberedNotation(score)
+  enableScoreRendering(score, project.intro)
   if (!score.stylesheet.perTrackMultiBarRest?.size) {
     alignBarColumns(api, (part ? tracks[0]?.layout ?? project.layout : project.layout).barsPerLine)
   }

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
-import { parseProject } from '../src/model'
+import { createProject, parseProject } from '../src/model'
 
 test('creates an eight-measure score with lyrics, chord, fret and staff entries and reopens it', async ({ page }) => {
   await page.goto('/')
@@ -233,6 +233,44 @@ test('places the intro endpoint after the last note by default and supports a pa
   await page.getByRole('button', { name: '保存 •' }).click()
   const saved = parseProject(await readFile((await (await download).path())!, 'utf8'))
   expect(saved.intro).toEqual([0, 0, 720, 960])
+})
+
+test('keeps intro parentheses clear of ending and repeat barlines in every part', async ({ page }) => {
+  const project = createProject('demo')
+  project.intro = [0, 7]
+  project.measures[3] = { end: true }
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'brackets.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  async function check(scope: string, repeat = false) {
+    const brackets = page.locator(scope + ' [data-intro-parenthesis=end]')
+    await expect(brackets).toHaveCount(3)
+    const gaps = await brackets.evaluateAll((paths, repeat) => paths.map((path) => {
+      const bracket = (path as SVGPathElement).getBBox()
+      const source = (path as SVGPathElement).ownerSVGElement!
+      const vertical = [...source.querySelectorAll('rect')].map((node) => node.getBBox()).filter((barline) =>
+        barline.width < 8 && barline.height > 14 && barline.x + barline.width > bracket.x &&
+        barline.y < bracket.y + bracket.height && barline.y + barline.height > bracket.y)
+      const dots = repeat ? [...source.querySelectorAll('g.at')].filter((node) => node.textContent === '\ue044')
+        .map((node) => (node as SVGGElement).transform.baseVal.getItem(0).matrix.e)
+        .filter((x) => x >= bracket.x && x < bracket.x + 30) : []
+      const line = Math.min(...vertical.map(({ x }) => x), ...dots)
+      return { track: path.getAttribute('data-intro-track'), gap: line - bracket.x - bracket.width }
+    }), repeat)
+    for (const entry of gaps) {
+      expect(entry.gap, JSON.stringify(entry)).toBeGreaterThan(2)
+      expect(entry.gap, JSON.stringify(entry)).toBeLessThan(24)
+    }
+  }
+  await check('.canvas')
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  await check('.preview-scroll .print-page')
+  await page.getByRole('dialog').getByRole('button', { name: '关闭' }).click()
+  await page.getByRole('button', { name: /^前奏括号/ }).click()
+  await page.getByLabel('结束小节').selectOption('3')
+  await page.getByRole('button', { name: '应用前奏括号' }).click()
+  await check('.canvas', true)
 })
 
 test('renames a part in place and uses the new name in notation, export and saved projects', async ({ page }) => {

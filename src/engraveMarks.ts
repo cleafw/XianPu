@@ -1,6 +1,7 @@
 import { model, type AlphaTabApi, type Settings } from '@coderline/alphatab'
 import type { Beat, NumberedKeyLayout, Project, Track } from './model'
 import { markSymbol } from './markGlyphs'
+import { introContentEdges } from './scoreRendering'
 import { pairedSpans, type ScoreMark, type SpanEnd, type SpanKind } from './notationMarks'
 
 const { MusicFontSymbol: smufl } = model
@@ -306,13 +307,18 @@ function introParenthesis(fragment: Fragment, bar: StaffBar, opening: boolean, s
   const next = beat && beats[beats.indexOf(beat) + 1]
   const heads = beat?.notes?.map(({ noteHeadBounds }) => noteHeadBounds) ?? []
   const staff = bar.realBounds
+  const edges = introContentEdges(bar)
   const notesX = beat?.onNotesX ?? staff.x + staff.w / 2
   const edge = opening
     ? Math.min(beat?.visualBounds.x ?? notesX - 5 * scale, ...heads.map(({ x }) => x))
     : tick == null || !next ? staff.x + staff.w
       : Math.max(notesX + 5 * scale, ...heads.map(({ x, w }) => x + w),
         beat.beat.displayDuration > 960 ? next.visualBounds.x - 8 * scale : 0)
-  const x = Math.max(staff.x + 7 * scale, Math.min(staff.x + staff.w - 7 * scale, edge + (opening ? -2 : 2) * scale)) - fragment.x
+  const firstBeat = !beat || beat === bar.beats[0] || beat === beats[0]
+  const start = edges ? edges.start - 3 * scale : staff.x + 7 * scale
+  const end = edges ? edges.end + 4 * scale : staff.x + staff.w - 14 * scale
+  const anchor = opening && firstBeat ? start : !opening && (tick == null || !next) ? end : edge + (opening ? -2 : 2) * scale
+  const x = Math.max(start, Math.min(end, anchor)) - fragment.x
   const center = staff.y + staff.h / 2
   const top = Math.max(2, Math.min(center - 9 * scale, ...heads.map(({ y }) => y - 3 * scale)) - fragment.y)
   const bottom = Math.min(fragment.height - 2, Math.max(center + 9 * scale, ...heads.map(({ y, h }) => y + h + 3 * scale)) - fragment.y)
