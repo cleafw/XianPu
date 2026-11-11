@@ -28,7 +28,9 @@ export type Beat = {
   draft?: boolean; lyric?: string; chord?: string; diagram?: number[]; tie?: boolean; slur?: boolean
 }
 export type NumberedKeyLayout = { hidden?: boolean; x?: number; y?: number }
-export type Layout = { mode?: Mode; barsPerLine: number; systemsPerPage: number; paper?: Paper; systemBreaks?: number[]; pageBreaks?: number[]; compressRests?: boolean; printHeader?: string; printFooter?: string; showPageNumbers?: boolean; trackGap?: number; numberedKey?: NumberedKeyLayout }
+export type ScoreLabelKind = 'key' | 'tempo'
+export const trackGapLimits = [-120, 100] as const
+export type Layout = { mode?: Mode; barsPerLine: number; systemsPerPage: number; paper?: Paper; systemBreaks?: number[]; pageBreaks?: number[]; compressRests?: boolean; printHeader?: string; printFooter?: string; showPageNumbers?: boolean; trackGap?: number; numberedKey?: NumberedKeyLayout; hiddenLabels?: Partial<Record<ScoreLabelKind, number[]>> }
 export type Voice = { staff?: 0 | 1; bars: Beat[][] }
 export type Track = {
   id: string; name: string; kind: Kind; mode: Mode; sound?: number; tuning: number[]; bars: Beat[][]; layout: Layout
@@ -56,9 +58,10 @@ export const pitchNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A�
 const intervals = [0, 2, 4, 5, 7, 9, 11]
 export const layout = (): Layout => ({ barsPerLine: 4, systemsPerPage: 3 })
 export function shiftedLayout(layout: Layout, index: number, delta: number): Layout {
-  const shift = (breaks?: number[]) => breaks?.flatMap((bar) =>
-    delta < 0 && bar === index ? [] : [bar >= index ? bar + delta : bar]).filter((bar) => bar > 0 && bar < 256)
-  return { ...layout, systemBreaks: shift(layout.systemBreaks), pageBreaks: shift(layout.pageBreaks) }
+  const shift = (bars?: number[], first = 1) => bars?.flatMap((bar) =>
+    delta < 0 && bar === index ? [] : [bar >= index ? bar + delta : bar]).filter((bar) => bar >= first && bar < 256)
+  const hiddenLabels = layout.hiddenLabels && { key: shift(layout.hiddenLabels.key, 0), tempo: shift(layout.hiddenLabels.tempo, 0) }
+  return { ...layout, systemBreaks: shift(layout.systemBreaks), pageBreaks: shift(layout.pageBreaks), hiddenLabels }
 }
 export function shiftedIntro(intro: Project['intro'], index: number, delta: number): Project['intro'] {
   if (!intro) return
@@ -295,7 +298,9 @@ const creditsValid = (value: unknown) => value === undefined || object(value) &&
   ['subtitle', 'lyricist', 'composer', 'arranger', 'engraver'].every((key) => value[key] === undefined || string(value[key]))
 const modeValid = (value: unknown): value is Mode => typeof value === 'string' && Object.hasOwn(modes, value)
 const layoutValid = (value: unknown) => object(value) && number(value.barsPerLine, 1, 12) &&
-  (value.trackGap === undefined || number(value.trackGap, 0, 100)) &&
+  (value.trackGap === undefined || number(value.trackGap, ...trackGapLimits)) &&
+  (value.hiddenLabels === undefined || object(value.hiddenLabels) && [value.hiddenLabels.key, value.hiddenLabels.tempo].every((bars) =>
+    bars === undefined || Array.isArray(bars) && bars.length <= 256 && bars.every((bar) => number(bar, 0, 255)))) &&
   (value.numberedKey === undefined || object(value.numberedKey) && flag(value.numberedKey.hidden)
     && (value.numberedKey.x === undefined || number(value.numberedKey.x, -120, 120))
     && (value.numberedKey.y === undefined || number(value.numberedKey.y, -120, 120))) &&

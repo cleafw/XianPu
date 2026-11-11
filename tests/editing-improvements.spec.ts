@@ -148,10 +148,12 @@ test('adds bamboo flute symbols from the grid and list and prints the same signs
   await expect(paper.locator('[data-code=fluteZeng] text')).toHaveText('贝')
 })
 
-test('keeps notation marks clear of numbered key labels and saves part spacing and key visibility', async ({ page }) => {
+test('shows one numbered key per change and lets overlapping spacing and part labels be edited', async ({ page }) => {
   const project = createProject('demo')
   project.key = -2
   project.meter = [3, 4]
+  project.intro = [0, 3]
+  project.measures[2].bpm = 106
   const first = project.tracks[0]
   first.bars = first.bars.map((bar) => bar.slice(0, 3))
   const second = structuredClone(first)
@@ -159,12 +161,14 @@ test('keeps notation marks clear of numbered key labels and saves part spacing a
   second.name = '笛子'
   project.tracks = [first, second]
   first.bars[0][0].marks = [{ id: 'key-clearance', code: 'text', text: '技巧', place: 'above', dx: -27, dy: 0 }]
+  first.bars[0][0].spans = [{ id: 'hairpin', kind: 'diminuendo', end: false }]
+  first.bars[1][2].spans = [{ id: 'hairpin', kind: 'diminuendo', end: true }]
   await page.goto('/')
   await page.locator('input[type=file]').setInputFiles({
     name: 'key-clearance.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
   })
   const keys = page.locator('.canvas [data-numbered-key]')
-  await expect(keys).toHaveCount(2)
+  await expect(keys).toHaveCount(1)
   const mark = page.locator('.canvas [data-mark=key-clearance] text')
   const markBox = (await mark.boundingBox())!
   const keyBox = (await keys.first().locator(':scope > text').boundingBox())!
@@ -174,7 +178,8 @@ test('keeps notation marks clear of numbered key labels and saves part spacing a
   expect(overlapsKey(markBox)).toBe(false)
   expect(overlapsKey(chordBox)).toBe(false)
   const spacing = async () => {
-    const [upper, lower] = await keys.locator(':scope > text').evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().top))
+    const [upper, lower] = await page.locator('.canvas [data-intro-parenthesis=start]').evaluateAll((nodes) =>
+      nodes.map((node) => node.getBoundingClientRect().top))
     return lower - upper
   }
   const before = await spacing()
@@ -185,15 +190,66 @@ test('keeps notation marks clear of numbered key labels and saves part spacing a
   await page.getByLabel('总谱分谱间距').press('Tab')
   await close.click()
   await expect.poll(spacing).toBeGreaterThan(before + 40)
+  await settings.click()
+  await page.getByLabel('总谱分谱间距').fill('-80')
+  await page.getByLabel('总谱分谱间距').press('Tab')
+  await close.click()
+  await expect.poll(spacing).toBeLessThan(before - 20)
   const sidebar = page.getByRole('navigation')
   await sidebar.getByRole('button', { name: '笛子', exact: true }).click()
+  await page.getByRole('button', { name: '编辑此处调号' }).click()
+  await page.getByRole('button', { name: '从当前谱面隐藏' }).click()
+  await expect(keys).toHaveCount(0)
   await settings.click()
-  await page.getByRole('checkbox', { name: '显示简谱调号' }).uncheck()
+  await page.getByRole('button', { name: '恢复已隐藏的调号和速度' }).click()
   await close.click()
+  await expect(keys).toHaveCount(1)
+  const tempo = page.locator('.canvas [data-score-label-kind=tempo][data-score-label-bar="2"]')
+  await tempo.click()
+  await page.getByLabel('速度 BPM').fill('110')
+  await page.getByRole('button', { name: '应用', exact: true }).click()
+  await expect(tempo).toContainText('110')
+  await tempo.click()
+  await page.getByRole('button', { name: '移除此处速度变化' }).click()
+  await expect(tempo).toHaveCount(0)
   await sidebar.getByRole('button', { name: '总谱', exact: true }).click()
   await expect(page.locator('.canvas [data-numbered-key]:visible')).toHaveCount(1)
   await page.getByRole('button', { name: '导出', exact: true }).click()
   await expect(page.getByRole('dialog').locator('.print-page [data-numbered-key]:visible')).toHaveCount(1)
+})
+
+test('edits a key directly on the score with either pitch or numbered degrees preserved', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  const sidebar = page.getByRole('navigation')
+  await sidebar.getByRole('button', { name: '简谱', exact: true }).click()
+  const renderedKey = page.getByRole('button', { name: '编辑此处调号' })
+  await expect(renderedKey).toHaveText('1 = C')
+  const noteText = page.locator('.canvas svg text').filter({ hasText: /^[0-7]$/ })
+  const original = await noteText.allTextContents()
+  const dialog = page.getByRole('dialog')
+  const firstNote = page.getByRole('button', { name: '简谱位置 1', exact: true })
+
+  await renderedKey.click()
+  await expect(dialog.getByLabel('切换调号时')).toHaveValue('pitch')
+  await dialog.getByRole('combobox', { name: '调号', exact: true }).selectOption('2')
+  await expect(renderedKey).toHaveText('1 = D')
+  await expect(firstNote).toContainText('C')
+  expect(await noteText.allTextContents()).not.toEqual(original)
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(renderedKey).toHaveText('1 = C')
+
+  await renderedKey.click()
+  await dialog.getByLabel('切换调号时').selectOption('numbered')
+  await dialog.getByRole('combobox', { name: '调号', exact: true }).selectOption('2')
+  await expect(renderedKey).toHaveText('1 = D')
+  await expect(firstNote).toContainText('D')
+  expect(await noteText.allTextContents()).toEqual(original)
+  await sidebar.getByRole('button', { name: '五线谱', exact: true }).click()
+  await renderedKey.first().click()
+  await expect(dialog.getByRole('combobox', { name: '调号', exact: true })).toHaveValue('2')
+  await dialog.getByRole('button', { name: '从当前谱面隐藏' }).click()
+  await expect(page.locator('.canvas [data-score-label-kind=key][data-score-label-bar="0"]')).toHaveCount(0)
 })
 
 test('writes printable marks, a pitched grace note, and a cross-system range', async ({ page }) => {

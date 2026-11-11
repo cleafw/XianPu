@@ -3,7 +3,7 @@ import { useMeasureDrag } from './useMeasureDrag'
 import type { AlphaTabApi } from '@coderline/alphatab'
 import { useLanguage } from './i18n'
 import { drawScore, scoreBeatIndex, scoreNoteIndex } from './score'
-import type { Mode, Position, Project, Track } from './model'
+import type { Mode, Position, Project, ScoreLabelKind, Track } from './model'
 
 type MasterBar = NonNullable<ReturnType<NonNullable<AlphaTabApi['boundsLookup']>['findMasterBarByIndex']>>
 type StaffBar = MasterBar['bars'][number]
@@ -18,11 +18,12 @@ function lanes(master: MasterBar, bar: StaffBar) {
   return master.bars.filter((entry) => entry.bar === bar.bar).sort((a, b) => a.realBounds.y - b.realBounds.y)
 }
 
-export function ScoreView({ project, part, position, playhead, selectedBars = [], scale = 1, print = false, onSelect, onBarSelect, onBarRange, onBarMenu, onReady, onError }: {
+export function ScoreView({ project, part, position, playhead, selectedBars = [], scale = 1, print = false, onSelect, onLabelSelect, onBarSelect, onBarRange, onBarMenu, onReady, onError }: {
   project: Project; part: string | null; position?: Position; playhead?: Position | null; selectedBars?: number[]; scale?: number; print?: boolean; onSelect?: (position: Position) => void;
   onBarSelect?: (position: Position, event: MouseEvent) => void;
   onBarRange?: (start: Position, end: number) => void;
   onBarMenu?: (position: Position, event: MouseEvent) => void;
+  onLabelSelect?: (kind: ScoreLabelKind, bar: number) => void;
   onReady?: (systems: number, firstBars: number[]) => void; onError?: (error: Error) => void
 }) {
   const { language, t } = useLanguage()
@@ -79,6 +80,14 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
   }
 
   const drag = useMeasureDrag(positionAt, onBarRange)
+  function selectLabel(target: EventTarget | null) {
+    if (!onLabelSelect || !(target instanceof Element)) return false
+    const label = target.closest('[data-score-label-kind]')
+    const kind = label?.getAttribute('data-score-label-kind')
+    if (kind !== 'key' && kind !== 'tempo') return false
+    onLabelSelect(kind, Number(label?.getAttribute('data-score-label-bar')))
+    return true
+  }
 
   function markPosition() {
     const marker = cursor.current
@@ -152,6 +161,11 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     try {
       const api = drawScore(element, project, part, scale, language, () => {
         restoreScroll()
+        if (onLabelSelect) for (const label of element.querySelectorAll('[data-score-label-kind]')) {
+          label.setAttribute('role', 'button')
+          label.setAttribute('tabindex', '0')
+          label.setAttribute('aria-label', t(label.getAttribute('data-score-label-kind') === 'key' ? '编辑此处调号' : '编辑此处速度'))
+        }
         const systems = apiRef.current?.boundsLookup?.staffSystems ?? []
         callbacks.current.onReady?.(systems.length, systems.map((system) => system.bars[0]?.index ?? 0))
         markPosition()
@@ -176,6 +190,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     <div ref={container} className="score-render" data-testid="score-render"
       {...drag.handlers} aria-label={t('可点击的乐谱')} onPointerDown={onSelect ? (event) => {
         if (event.button !== 0) return
+        if (selectLabel(event.target)) return
         const target = positionAt(event)
         if (!target) return
         const clicked = event.target instanceof Element ? event.target.closest('text') : null
@@ -184,6 +199,8 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
           onBarSelect(target, event)
         } else onSelect(target)
         if (!event.shiftKey && !event.ctrlKey && !event.metaKey && onBarRange) drag.start(event, target)
+      } : undefined} onKeyDown={onLabelSelect ? (event) => {
+        if ((event.key === 'Enter' || event.key === ' ') && selectLabel(event.target)) event.preventDefault()
       } : undefined} onContextMenu={onBarMenu ? (event) => {
         const target = positionAt(event)
         if (!target) return

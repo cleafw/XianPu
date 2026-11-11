@@ -25,6 +25,8 @@ type BarRenderer = {
   postBeatGlyphsStart: number
   _preBeatGlyphs: { width: number }
   _postBeatGlyphs: Pick<Glyph, 'width' | 'paint'>
+  _createKeySignatureGlyphs?(): void
+  addPreBeatGlyph(glyph: Glyph & { isEmpty?: boolean }): void
   createPreBeatGlyphs(): void
   createPostBeatGlyphs(): void
   buildBoundingsLookup(master: rendering.MasterBarBounds, cx: number, cy: number): void
@@ -35,7 +37,7 @@ type BarRenderer = {
 }
 type RendererFactory = { staffId: string; create(renderer: unknown, bar: model.Bar): BarRenderer }
 
-const appScores = new WeakMap<model.Score, IntroRange | undefined>()
+const appScores = new WeakMap<model.Score, { intro?: IntroRange; hiddenKeys?: readonly number[] }>()
 const introBounds = new WeakMap<rendering.BarBounds, { width: number; start: number; end: number }>()
 const introPadding = 14
 let installed = false
@@ -189,8 +191,8 @@ export function introContentEdges(bar: rendering.BarBounds) {
   return { start: x + bounds.start * w / bounds.width, end: x + bounds.end * w / bounds.width }
 }
 
-export function enableScoreRendering(score: model.Score, intro?: IntroRange) {
-  appScores.set(score, intro)
+export function enableScoreRendering(score: model.Score, intro?: IntroRange, hiddenKeys?: readonly number[]) {
+  appScores.set(score, { intro, hiddenKeys })
   if (installed) return
   const factories = (Environment as unknown as { defaultRenderers: RendererFactory[] }).defaultRenderers
   installed = true
@@ -198,14 +200,37 @@ export function enableScoreRendering(score: model.Score, intro?: IntroRange) {
     const create = factory.create.bind(factory)
     factory.create = (renderer, bar) => {
       const result = create(renderer, bar)
-      if (!appScores.has(bar.staff.track.score)) return result
-      const range = appScores.get(bar.staff.track.score)
+      const options = appScores.get(bar.staff.track.score)
+      if (!options) return result
+      const range = options.intro
       if (range && (bar.index === range[0] || bar.index === range[1])) {
         reserveIntroPadding(result, bar.index === range[0], bar.index === range[1])
       }
       if (factory.staffId === 'numbered') patchNumberedNotation(result)
+      if (factory.staffId === 'score') tagStaffKey(result, bar.index, options.hiddenKeys?.includes(bar.index) ?? false)
       return result
     }
+  }
+}
+
+function tagStaffKey(renderer: BarRenderer, bar: number, hidden: boolean) {
+  const create = renderer._createKeySignatureGlyphs?.bind(renderer)
+  if (!create) return
+  renderer._createKeySignatureGlyphs = () => {
+    const add = renderer.addPreBeatGlyph
+    renderer.addPreBeatGlyph = (glyph) => {
+      if (glyph.isEmpty === false) {
+        if (hidden) return
+        const paint = glyph.paint.bind(glyph)
+        glyph.paint = (x, y, canvas) => {
+          canvas.beginGroup(`xianpu-staff-key-${bar}`)
+          paint(x, y, canvas)
+          canvas.endGroup()
+        }
+      }
+      add.call(renderer, glyph)
+    }
+    try { create() } finally { renderer.addPreBeatGlyph = add }
   }
 }
 
@@ -227,9 +252,11 @@ function patchNumberedNotation(result: BarRenderer) {
 }
 
 type Staff = {
-  topPadding: number; topOverflow: number
+  topPadding: number; topOverflow: number; bottomPadding: number; height: number
+  trackIndex: number; staffId: string; isVisible: boolean
+  _applyStaffPaddings(): void
   resetSharedLayoutData(): void
-  barRenderers: { x: number; y: number; scaleToWidth(width: number): void }[]
+  barRenderers: { x: number; y: number; bar: model.Bar; scaleToWidth(width: number): void }[]
 }
 type System = {
   accoladeWidth: number; width: number; x: number; y: number; lastBarIndex: number; allStaves: Staff[]
@@ -246,6 +273,51 @@ type PageLayout = {
   _paintSystem(system: System, totalHeight: number): number
   _layoutAndRenderScore(y: number, start: number): number
   _scaleToWidth(system: System, width: number): void
+}
+
+function pageLayout(api: AlphaTabApi) {
+  return (api.renderer as unknown as { instance?: { layout: PageLayout } }).instance?.layout
+}
+
+export function spaceTrackMarks(api: AlphaTabApi, padding: { above: number; below: number }[][],
+  caption: { track: number; bars: ReadonlyMap<number, number>; extra: number }, gap: number) {
+  const layout = pageLayout(api)
+  if (!layout?._createStaffSystem) return
+  const create = layout._createStaffSystem.bind(layout)
+  layout._createStaffSystem = (start, end) => {
+    const system = create(start, end)
+    for (const [index, trackPadding] of padding.entries()) {
+      const staves = system.allStaves.filter((staff) => staff.trackIndex === index &&
+        ['score', 'numbered', 'tab'].includes(staff.staffId))
+      const first = staves[0]
+      const last = staves.at(-1)
+      if (!first || !last) continue
+      const measureIndices = first.barRenderers.map(({ bar }) => bar.index)
+      const above = Math.max(0, ...measureIndices.map((bar) => trackPadding[bar].above))
+      const below = Math.max(0, ...measureIndices.map((bar) => trackPadding[bar].below))
+      const keySpace = caption.track === index && measureIndices.some((bar) => caption.bars.has(bar))
+        ? caption.extra : 0
+      const top = first._applyStaffPaddings.bind(first)
+      first._applyStaffPaddings = () => { top(); first.topPadding += above + keySpace }
+      const bottom = last._applyStaffPaddings.bind(last)
+      last._applyStaffPaddings = () => { bottom(); last.bottomPadding += below }
+      first._applyStaffPaddings()
+      if (last !== first) last._applyStaffPaddings()
+    }
+    return system
+  }
+  if (gap >= 0) return
+  const fit = layout._fitSystem.bind(layout)
+  layout._fitSystem = (system) => {
+    const heights = new Map<number, number>()
+    for (const staff of system.allStaves) {
+      if (staff.isVisible) heights.set(staff.trackIndex, (heights.get(staff.trackIndex) ?? 0) + staff.height)
+    }
+    const groups = [...heights.values()]
+    // Preserve the order of the track origins even when a negative gap overlaps their content.
+    api.settings.display.trackStaffPaddingBetween = Math.max(gap, 8 - Math.min(...groups.slice(0, -1)))
+    try { fit(system) } finally { api.settings.display.trackStaffPaddingBetween = 0 }
+  }
 }
 
 function barGrid(systems: System[], width: number, columns: number) {
@@ -280,7 +352,7 @@ function barGrid(systems: System[], width: number, columns: number) {
 }
 
 export function alignBarColumns(api: AlphaTabApi, columns: number) {
-  const layout = (api.renderer as unknown as { instance?: { layout: PageLayout } }).instance?.layout
+  const layout = pageLayout(api)
   if (!layout?._scaleToWidth) return
   const scaleToWidth = layout._scaleToWidth.bind(layout)
   let cached: { systems: System[]; width: number; grid: ReturnType<typeof barGrid> } | undefined

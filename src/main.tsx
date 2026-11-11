@@ -18,12 +18,13 @@ import { NavigationEditor, navigationMessage } from './NavigationEditor'
 import { resolveScoreNavigation } from './scoreNavigation'
 import { paperDimensions, paperMargin } from './paper'
 import { beatList, beatRange, blank, changeBeat, clearMeasureContents, createProject, createTrack, defaultWatermarkStyle, extendNumberedBeat, keyNames, kinds, measureDifference, measureSettings, modes, paperFor, parseProject,
-  pitchNames, shiftedEndings, shiftedIntro, shiftedLayout, techniqueGroups, ticks, voiceBars, watermarkLimits, watermarkMaxLength,
-  type Beat, type IntroRange, type Kind, type Layout, type Measure, type Mode, type Position, type Project, type Track, type WatermarkStyle } from './model'
+  pitchNames, shiftedEndings, shiftedIntro, shiftedLayout, techniqueGroups, ticks, trackGapLimits, voiceBars, watermarkLimits, watermarkMaxLength,
+  type Beat, type IntroRange, type Kind, type Layout, type Measure, type Mode, type Position, type Project, type ScoreLabelKind, type Track, type WatermarkStyle } from './model'
 import { playScore, stopPlayback } from './playback'
 import { copyMeasures, pasteMeasures, type MeasureClipboard, type PasteMode } from './measureClipboard'
 import * as storage from './storage'
 import { importMidi, maxMidiBytes } from './midiImport'
+import { changeKeySignature, type KeyChangeError, type KeyChangeMode } from './keyChange'
 import './styles.css'
 
 type History = { past: Project[]; value: Project | null; future: Project[] }
@@ -44,6 +45,10 @@ const templates = [
 ] as const
 const creditFields = { subtitle: '副标题', lyricist: '作词', composer: '作曲', arranger: '编曲', engraver: '制谱' } as const
 const meters = [2, 4, 8, 16].flatMap((unit) => Array.from({ length: 12 }, (_, i) => (i + 1) + '/' + unit))
+const keyChangeErrors: Record<KeyChangeError, TextKey> = {
+  'pitch-range': '移调后的音高超出可记谱范围。',
+  'guitar-range': '按当前定弦，吉他无法演奏移调后的部分音符或和弦。',
+}
 
 type PrintJob = { part: string | null; key: number; project: Project }
 type ExportMode = 'current' | 'score' | 'parts'
@@ -117,6 +122,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [playhead, setPlayhead] = useState<Position | null>(null)
   const [audioState, setAudioState] = useState<'idle' | 'loading' | 'playing'>('idle')
   const [panel, setPanel] = useState<'settings' | 'intro' | 'export' | 'track' | 'paper' | 'sounds' | 'remove-part' | 'midi-report' | null>(null)
+  const [keyChangeMode, setKeyChangeMode] = useState<KeyChangeMode>('pitch')
+  const [keyChangeError, setKeyChangeError] = useState<{ reason: KeyChangeError; bar?: number }>()
+  const [scoreLabel, setScoreLabel] = useState<{ kind: ScoreLabelKind; bar: number } | null>(null)
   const [introDraft, setIntroDraft] = useState<IntroRange>([0, 0])
   const [partToRemove, setPartToRemove] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<(() => void) | null>(null)
@@ -183,6 +191,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     stopPlayback()
     setAudioState('idle')
     setError(null)
+    setKeyChangeError(undefined)
+    setScoreLabel(null)
     setNotice(null)
     setMidiWarnings([])
     setPanel(null)
@@ -321,7 +331,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }, [dirty])
   useEffect(() => {
     function shortcuts(event: KeyboardEvent) {
-      if (event.defaultPrevented || event.isComposing) return
+      if (event.defaultPrevented || event.isComposing || scoreLabel) return
       if (event.key === 'Escape' && !panel && !confirm && !pasteWarning && !barMenu) {
         setSelectedBars([])
         rangeAnchor.current = null
@@ -552,6 +562,26 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       measures[barIndex] = { ...current, ...changes }
       return { ...score, measures }
     })
+  }
+  function applyKeySignature(key: number | undefined, bar?: number) {
+    if (!project) return false
+    const result = changeKeySignature(project, key, keyChangeMode, bar)
+    if ('error' in result) {
+      setKeyChangeError({ reason: result.error, bar })
+      return false
+    }
+    setKeyChangeError(undefined)
+    if (result.score !== project) commit(() => result.score)
+    return true
+  }
+  function openScoreLabel(kind: ScoreLabelKind, bar: number) {
+    setKeyChangeError(undefined)
+    setScoreLabel({ kind, bar })
+  }
+  function setLabelTempo(bpm: number | undefined, bar?: number) {
+    commit((score) => bar === undefined ? { ...score, bpm: bpm ?? score.bpm }
+      : { ...score, measures: score.measures.map((measure, index) => index === bar ? { ...measure, bpm } : measure) })
+    setScoreLabel(null)
   }
   function changeBarMeter(value: string) {
     if (!project) return
@@ -794,10 +824,10 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
               <label>{t('缩放')}<select value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>{[75, 90, 100, 125, 150].map((n) => <option key={n} value={n}>{n}%</option>)}</select></label></div></div>
           <div className="paper-scroll"><div className="paper" style={{ width: page.width * zoom / 100 + 'mm', paddingInline: paperMargin * zoom / 100 + 'mm' }}>
             <ScoreView key={projectSession.current} project={project} part={activePart} position={position} playhead={audioState === 'playing' ? playhead : null} selectedBars={measureSelection} scale={zoom / 100} onSelect={(target) => selectBeat(target, true)}
-              onBarSelect={selectMeasure} onBarRange={selectMeasureRange} onBarMenu={showBarMenu} onError={(cause) => setError(message('谱面绘制失败。', undefined, cause))} />
+              onLabelSelect={openScoreLabel} onBarSelect={selectMeasure} onBarRange={selectMeasureRange} onBarMenu={showBarMenu} onError={(cause) => setError(message('谱面绘制失败。', undefined, cause))} />
           </div></div>
           <section className="position-panel" aria-label={t('小节与录入位置')}>
-            <PanelsSuspended.Provider value={!!(panel || confirm || pasteWarning || busy)}>
+            <PanelsSuspended.Provider value={!!(panel || scoreLabel || confirm || pasteWarning || busy)}>
               <ToolPanel label={t('录入位置')} placement="bottom" initialOpen onDock={() => setBarMenu(null)}>
                 <div className="position-header">
                   <div><small>{t('可直接点谱面，也可在这里选择。')}</small>
@@ -862,12 +892,12 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
             </PanelsSuspended.Provider>
           </section>
         </section>
-        <PanelsSuspended.Provider value={!!(panel || confirm || pasteWarning || busy)}>
-        {track && <Editor suspended={!!(panel || confirm || pasteWarning || barMenu)} score={project} track={track} position={position} mode={entryMode} beat={beat} editDraftRest={!!selection.editDraftRest}
+        <PanelsSuspended.Provider value={!!(panel || scoreLabel || confirm || pasteWarning || busy)}>
+        {track && <Editor suspended={!!(panel || scoreLabel || confirm || pasteWarning || barMenu)} score={project} track={track} position={position} mode={entryMode} beat={beat} editDraftRest={!!selection.editDraftRest}
           edit={(edit) => commit((score) => changeBeat(score, position, edit))} putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} extendBeat={extendBeat} />}
         </PanelsSuspended.Provider>
-        {(panel || confirm || pasteWarning || barMenu) && <div className="inspector inspector-placeholder" aria-hidden="true" />}
-        {track && !(panel || confirm || pasteWarning || barMenu) && <PanelWidthHandle label={t('调整右侧栏宽度')} side="left"
+        {(panel || scoreLabel || confirm || pasteWarning || barMenu) && <div className="inspector inspector-placeholder" aria-hidden="true" />}
+        {track && !(panel || scoreLabel || confirm || pasteWarning || barMenu) && <PanelWidthHandle label={t('调整右侧栏宽度')} side="left"
           width={() => workspace.current?.querySelector('.inspector')?.getBoundingClientRect().width ?? 0}
           resize={(width) => {
             if (workspace.current) setInspectorWidth(Math.max(0, width) / workspace.current.clientWidth * 100)
@@ -958,7 +988,55 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         <button onClick={() => saveIntro()}>{t('移除前奏括号')}</button>
       </div>}
     </Modal>}
-    {project && panel === 'settings' && <Modal title={t('曲谱设置')} close={() => setPanel(null)}>
+    {project && scoreLabel && (() => {
+      const { kind, bar } = scoreLabel
+      const source = project.measures.findLastIndex((measure, index) => index <= bar &&
+        (kind === 'key' ? measure.key : measure.bpm) !== undefined)
+      const changeBar = source < 0 ? undefined : source
+      const close = () => { setKeyChangeError(undefined); setScoreLabel(null) }
+      return <Modal title={t(kind === 'key' ? '编辑此处调号' : '编辑此处速度')} close={close}>
+        <p className="key-change-help">{t('第 {bar} 小节 · {scope}', { bar: bar + 1, scope: scoreName(project, activePart, t) })}</p>
+        {activePart && <p className="key-change-help">{t('调号和速度的修改会同步到总谱和分谱。')}</p>}
+        {kind === 'key' ? <>
+          <KeyChangeChoice mode={keyChangeMode} onChange={(mode) => { setKeyChangeMode(mode); setKeyChangeError(undefined) }} />
+          <label>{t('调号')}<select value={measureSettings(project, bar).key} onChange={(event) => {
+            if (applyKeySignature(Number(event.target.value), changeBar)) close()
+          }}>
+            {keyNames.map((name, index) => <option key={name} value={index - 7}>{t('{name} 大调', { name })}</option>)}
+          </select></label>
+          {keyChangeError && <p role="alert" className="inline-error">{t(keyChangeErrors[keyChangeError.reason])}</p>}
+        </> : <form className="field-row" onSubmit={(event) => {
+          event.preventDefault()
+          const bpm = Number(new FormData(event.currentTarget).get('bpm'))
+          if (bpm >= 20 && bpm <= 300) setLabelTempo(bpm, changeBar)
+        }}>
+          <label>{t('速度 BPM')}<input type="number" name="bpm" required min={20} max={300} defaultValue={measureSettings(project, bar).bpm} /></label>
+          <button className="primary" type="submit">{t('应用')}</button>
+        </form>}
+        <div className="tool-actions tool-actions-danger">
+          {changeBar !== undefined && <button onClick={() => {
+            if (kind === 'tempo') setLabelTempo(undefined, changeBar)
+            else if (applyKeySignature(undefined, changeBar)) close()
+          }}>{t(kind === 'key' ? '移除此处调号变化' : '移除此处速度变化')}</button>}
+          <button onClick={() => {
+            const hidden = viewLayout?.hiddenLabels
+            patchLayout({ hiddenLabels: { ...hidden, [kind]: [...new Set([...(hidden?.[kind] ?? []), bar])] } })
+            close()
+          }}>{t('从当前谱面隐藏')}</button>
+        </div>
+      </Modal>
+    })()}
+    {project && panel === 'settings' && <Modal title={t('曲谱设置')} close={() => { setKeyChangeError(undefined); setPanel(null) }}>
+      <div className="field-row">
+        <label>{t('调号')}<select value={project.key} onChange={(event) => applyKeySignature(Number(event.target.value))}>
+          {keyNames.map((name, i) => <option key={name} value={i - 7}>{t('{name} 大调', { name })}</option>)}
+        </select></label>
+        <KeyChangeChoice mode={keyChangeMode} onChange={(mode) => { setKeyChangeMode(mode); setKeyChangeError(undefined) }} />
+      </div>
+      <p id="key-change-help" className="key-change-help">{t(keyChangeMode === 'pitch'
+        ? '试听音高保持原样，简谱唱名按新调号显示。'
+        : '音符按新调移调。曲中调号只影响到下一处曲中调号之前。')}</p>
+      {keyChangeError && keyChangeError.bar === undefined && <p role="alert" className="inline-error">{t(keyChangeErrors[keyChangeError.reason])}</p>}
       <label>{t('曲名')}<input maxLength={200} value={project.title} onChange={(e) => commit((score) => ({ ...score, title: e.target.value }))} /></label>
       <label>{t('作者')}<input maxLength={200} value={project.author} onChange={(e) => commit((score) => ({ ...score, author: e.target.value }))} /></label>
       {Object.entries(creditFields).map(([key, label]) => {
@@ -967,8 +1045,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           onChange={(event) => commit((score) => ({ ...score, credits: { ...score.credits, [field]: event.target.value } }))} /></label>
       })}
       <WatermarkSettings project={project} edit={commit} />
-      <div className="field-row"><label>{t('调号')}<select value={project.key} onChange={(e) => commit((score) => ({ ...score, key: Number(e.target.value) }))}>
-        {keyNames.map((name, i) => <option key={name} value={i - 7}>{t('{name} 大调', { name })}</option>)}</select></label>
+      <div className="field-row">
         <label>{t('拍号')}<select value={project.meter.join('/')} onChange={(e) => {
           const meter = e.target.value.split('/').map(Number) as [number, number]
           commit((score) => ({ ...score, meter, pickup: Math.min(score.pickup, meter[0] - 1) }))
@@ -978,9 +1055,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       </div>
       <fieldset><legend>{t('调号与分谱间距')}</legend>
         <div className="field-row">
-          <label>{t('总谱分谱间距')}<input type="number" min={0} max={100} key={project.layout.trackGap}
+          <label>{t('总谱分谱间距')}<input type="number" min={trackGapLimits[0]} max={trackGapLimits[1]} key={project.layout.trackGap}
             defaultValue={project.layout.trackGap ?? 5} onBlur={(event) => {
-              const trackGap = Math.max(0, Math.min(100, Math.round(event.target.valueAsNumber || 0)))
+              const trackGap = Math.max(trackGapLimits[0], Math.min(trackGapLimits[1], Math.round(event.target.valueAsNumber || 0)))
               if (trackGap !== (project.layout.trackGap ?? 5)) commit((score) => ({ ...score, layout: { ...score.layout, trackGap } }))
               else event.target.value = String(trackGap)
             }} /></label>
@@ -996,16 +1073,18 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
             </label>
           })}
         </div>
+        <p className="key-change-help">{t('用负值缩小分谱间距，允许谱面重叠。')}</p>
         <label className="checkbox"><input type="checkbox" checked={!(viewLayout?.numberedKey ?? project.layout.numberedKey)?.hidden}
           onChange={(event) => patchLayout({ numberedKey: { ...(viewLayout?.numberedKey ?? project.layout.numberedKey), hidden: !event.target.checked } })} />
           {t('显示简谱调号')}</label>
         {activePart && viewLayout?.numberedKey && <button onClick={() => patchLayout({ numberedKey: undefined })}>{t('简谱调号跟随总谱')}</button>}
+        {viewLayout?.hiddenLabels && <button onClick={() => patchLayout({ hiddenLabels: undefined })}>{t('恢复已隐藏的调号和速度')}</button>}
       </fieldset>
       <label>{t('弱起 · 首小节拍数')}<select value={project.pickup} onChange={(e) => commit((score) => ({ ...score, pickup: Number(e.target.value) }))}>
         <option value={0}>{t('无弱起')}</option>{Array.from({ length: project.meter[0] - 1 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}</select></label>
       <fieldset><legend>{t('第 {bar} 小节的调号、拍号与速度', { bar: barIndex + 1 })}</legend><div className="field-row">
-        <label>{t('曲中调号')}<select value={project.measures[barIndex].key ?? ''} onChange={(event) =>
-          patchMeasure({ key: event.target.value ? Number(event.target.value) : undefined })}>
+        <label>{t('曲中调号')}<select value={project.measures[barIndex].key ?? ''} aria-describedby="key-change-help" onChange={(event) =>
+          applyKeySignature(event.target.value ? Number(event.target.value) : undefined, barIndex)}>
           <option value="">{t('沿用前文')}</option>{keyNames.map((name, i) => <option key={name} value={i - 7}>{name}</option>)}
         </select></label>
         {barMeterField('曲中拍号')}
@@ -1014,7 +1093,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
             const bpm = event.target.value ? Math.round(Math.min(300, Math.max(20, Number(event.target.value)))) : undefined
             if (bpm !== project.measures[barIndex].bpm) patchMeasure({ bpm })
           }} /></label>
-      </div></fieldset>
+      </div>
+        {keyChangeError?.bar === barIndex && <p role="alert" className="inline-error">{t(keyChangeErrors[keyChangeError.reason])}</p>}
+      </fieldset>
       <fieldset><legend>{t('第 {bar} 小节的反复记号', { bar: barIndex + 1 })}</legend>
         {(['start', 'end'] as const).map((side) => <label className="checkbox" key={side}>
           <input type="checkbox" checked={!!project.measures[barIndex][side]} onChange={(e) => commit((score) => ({ ...score,
@@ -1180,6 +1261,14 @@ function WatermarkSettings({ project, edit }: { project: Project; edit: (update:
       </label>)}
     </div>
   </fieldset>
+}
+
+function KeyChangeChoice({ mode, onChange }: { mode: KeyChangeMode; onChange: (mode: KeyChangeMode) => void }) {
+  const { t } = useLanguage()
+  return <label>{t('切换调号时')}<select value={mode} onChange={(event) => onChange(event.target.value === 'numbered' ? 'numbered' : 'pitch')}>
+    <option value="pitch">{t('保留实际音高')}</option>
+    <option value="numbered">{t('保留简谱唱名（移调）')}</option>
+  </select></label>
 }
 
 function Modal({ title, close, wide, children }: React.PropsWithChildren<{ title: string; close: () => void; wide?: boolean }>) {

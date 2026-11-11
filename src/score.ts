@@ -1,11 +1,11 @@
 import { AlphaTabApi, FontFileFormat, model, NotationElement, Settings, SystemsLayoutMode } from '@coderline/alphatab'
 import { translate, type Language } from './i18n'
-import { engraveMarks, reserveMarkSpace } from './engraveMarks'
+import { engraveMarks, markSpace } from './engraveMarks'
 import { createScoreWatermark } from './scoreWatermark'
 import bravura from '@coderline/alphatab/font/Bravura.woff2?url'
 import { beatList, guitarTuning, measureSettings, writtenKey, type Beat, type Project } from './model'
 import { resolveScoreNavigation, type NavigationDirection } from './scoreNavigation'
-import { alignBarColumns, enableScoreRendering } from './scoreRendering'
+import { alignBarColumns, enableScoreRendering, spaceTrackMarks } from './scoreRendering'
 
 export function scoreSettings() {
   const settings = new Settings()
@@ -16,6 +16,7 @@ export function scoreSettings() {
   settings.core.smuflFontSources = new Map([[FontFileFormat.Woff2, bravura]])
   settings.display.systemsLayoutMode = SystemsLayoutMode.UseModelLayout
   settings.notation.elements.set(NotationElement.EffectDynamics, false)
+  settings.notation.elements.set(NotationElement.EffectNumberedNotationKeySignature, false)
   settings.display.notationStaffPaddingBottom = 12
   const lyrics = settings.display.resources.elementFonts.get(NotationElement.EffectLyrics)!
   lyrics.families = ['XianPuLyrics', 'Microsoft YaHei UI', 'Microsoft YaHei', 'sans-serif']
@@ -166,7 +167,9 @@ export function buildScore(project: Project, part: string | null, settings: Sett
       master.section = new model.Section()
       master.section.marker = measure.rehearsal
     }
-    if (!index || measure.bpm !== undefined) master.tempoAutomations.push(model.Automation.buildTempoAutomation(false, 0, bpm, 2))
+    if (!index || measure.bpm !== undefined) {
+      master.tempoAutomations.push(model.Automation.buildTempoAutomation(false, 0, bpm, 2, !currentLayout.hiddenLabels?.tempo?.includes(index)))
+    }
     score.addMasterBar(master)
   }
   for (const track of tracks) {
@@ -241,16 +244,32 @@ export function drawScore(element: HTMLElement, project: Project, part: string |
   onReady?: () => void, onError?: (error: Error) => void, print = false) {
   const settings = scoreSettings()
   settings.display.scale = scale
-  settings.display.trackStaffPaddingBetween = project.layout.trackGap ?? settings.display.trackStaffPaddingBetween
   const { score, tracks } = buildScore(project, part, settings, language)
+  const layout = part ? tracks[0].layout : project.layout
+  const gap = part ? 0 : project.layout.trackGap ?? settings.display.trackStaffPaddingBetween
+  settings.display.trackStaffPaddingBetween = Math.max(0, gap)
   if (print && part && !project.intro && tracks[0]?.layout.compressRests && !tracks[0].layout.pageBreaks?.length && !tracks[0].layout.systemBreaks?.length && !project.measures.some((measure) => measure.simile || measure.rehearsal || measure.directions?.length) &&
     ![tracks[0].bars, ...tracks[0].voices?.map((voice) => voice.bars) ?? []].some((bars) =>
       bars.some((bar) => bar.some((beat) => !beat.notes.length && (beat.marks?.length || beat.spans?.length || beat.lyric || beat.verses?.some(Boolean) || beat.chord || beat.diagram))))) {
     score.stylesheet.perTrackMultiBarRest = new Set([0])
   }
-  reserveMarkSpace(settings, tracks, project.layout.numberedKey)
   const api = new AlphaTabApi(element, settings)
-  enableScoreRendering(score, project.intro)
+  enableScoreRendering(score, project.intro, layout.hiddenLabels?.key)
+  const keyLayout = layout.numberedKey ?? project.layout.numberedKey
+  const captionTrack = score.tracks.findIndex((track) => track.staves.some((staff) => staff.showNumbered))
+  const captionStaff = score.tracks[captionTrack]?.staves.find((staff) => staff.showNumbered)
+  const captionKeys = new Map<number, number>()
+  if (!keyLayout?.hidden && captionStaff) {
+    let previous: number | undefined
+    for (const bar of captionStaff.bars) {
+      const key = part ? bar.keySignature : measureSettings(project, bar.index).key
+      if (key !== previous && !layout.hiddenLabels?.key?.includes(bar.index)) captionKeys.set(bar.index, key)
+      previous = key
+    }
+  }
+  spaceTrackMarks(api, tracks.map(markSpace), {
+    track: captionTrack, bars: captionKeys, extra: Math.max(18, 24 - (keyLayout?.y ?? 0)),
+  }, gap)
   if (!score.stylesheet.perTrackMultiBarRest?.size) {
     alignBarColumns(api, (part ? tracks[0]?.layout ?? project.layout : project.layout).barsPerLine)
   }
@@ -259,7 +278,7 @@ export function drawScore(element: HTMLElement, project: Project, part: string |
     const footer = element.querySelector('.at-surface > div:last-child > svg')
     // Leave alphaTab's layout placeholder in place for subsequent resizes.
     if (footer?.textContent?.trim() === 'rendered by alphaTab') footer.remove()
-    engraveMarks(element, api.boundsLookup, tracks, scale, (beat) => sourceIndexes.get(beat)?.data, project.intro, project.layout.numberedKey)
+    engraveMarks(element, api.boundsLookup, scale, (beat) => sourceIndexes.get(beat)?.data, project.intro, captionKeys, keyLayout)
     if (!print) {
       element.querySelector(':scope > .score-watermark')?.remove()
       const watermark = createScoreWatermark(project)
