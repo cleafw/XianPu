@@ -31,6 +31,7 @@ h1, h2 { margin: 0; }
 .field-row > :is(label, input) { flex: 1 1 80px; min-width: 0; }
 .field-row > label > :is(input, select), .field-row > :is(input, button) { min-height: 34px; }
 .field-row > button { max-width: 100%; white-space: normal; }
+.intro-endpoint { display: grid; flex: 1 1 130px; gap: 8px; min-width: 0; }
 .app-shell { height: 100dvh; display: flex; flex-direction: column; min-height: 420px; }
 .topbar { height: 65px; flex: none; display: flex; align-items: center; gap: 18px; padding: 0 18px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .brand { display: flex; align-items: center; gap: 8px; min-width: 102px; color: inherit; text-decoration: none; border-radius: 10px; }

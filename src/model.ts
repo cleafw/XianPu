@@ -27,7 +27,8 @@ export type Beat = {
   marks?: ScoreMark[]; spans?: SpanEnd[]; verses?: string[];
   draft?: boolean; lyric?: string; chord?: string; diagram?: number[]; tie?: boolean; slur?: boolean
 }
-export type Layout = { mode?: Mode; barsPerLine: number; systemsPerPage: number; paper?: Paper; systemBreaks?: number[]; pageBreaks?: number[]; compressRests?: boolean; printHeader?: string; printFooter?: string; showPageNumbers?: boolean }
+export type NumberedKeyLayout = { hidden?: boolean; x?: number; y?: number }
+export type Layout = { mode?: Mode; barsPerLine: number; systemsPerPage: number; paper?: Paper; systemBreaks?: number[]; pageBreaks?: number[]; compressRests?: boolean; printHeader?: string; printFooter?: string; showPageNumbers?: boolean; trackGap?: number; numberedKey?: NumberedKeyLayout }
 export type Voice = { staff?: 0 | 1; bars: Beat[][] }
 export type Track = {
   id: string; name: string; kind: Kind; mode: Mode; sound?: number; tuning: number[]; bars: Beat[][]; layout: Layout
@@ -38,9 +39,10 @@ export const techniqueGroups = { '通用': 'General', '人声': 'Voice', '竹笛
 export function voiceBars(track: Track, voice = 0) {
   return voice ? track.voices?.[voice - 1]?.bars ?? track.bars : track.bars
 }
+export type IntroRange = [first: number, last: number, startTick?: number | null, endTick?: number | null]
 export type Project = {
   version: 1; title: string; author: string; credits?: Credits; watermark?: string; watermarkStyle?: WatermarkStyle; bpm: number; key: number;
-  meter: Meter; pickup: number; measures: Measure[]; intro?: [first: number, last: number];
+  meter: Meter; pickup: number; measures: Measure[]; intro?: IntroRange;
   tracks: Track[]; layout: Layout
 }
 export const watermarkMaxLength = 80
@@ -61,9 +63,18 @@ export function shiftedLayout(layout: Layout, index: number, delta: number): Lay
 export function shiftedIntro(intro: Project['intro'], index: number, delta: number): Project['intro'] {
   if (!intro) return
   const [first, last] = intro
-  if (delta > 0) return [first + (index <= first ? delta : 0), last + (index <= last ? delta : 0)]
+  const shifted: IntroRange = [...intro]
+  if (delta > 0) {
+    if (index <= first) shifted[0] += delta
+    if (index <= last) shifted[1] += delta
+    return shifted
+  }
   if (index === first && first === last) return
-  return [first - Number(index < first), last - Number(index <= last)]
+  shifted[0] -= Number(index < first)
+  shifted[1] -= Number(index <= last)
+  if (shifted.length > 2 && index === first) shifted[2] = null
+  if (shifted.length > 2 && index === last) shifted[3] = null
+  return shifted
 }
 export function shiftedEndings(measures: Measure[], index: number, delta: number) {
   return measures.map((measure, bar) => {
@@ -191,6 +202,33 @@ export function changeBeat(score: Project, position: Position, edit: (beat: Beat
     return { ...track, voices: track.voices?.map((item, index) => index === voice - 1 ? { ...item, bars: changed } : item) }
   }) }
 }
+/** Convert one quarter-note slot into an extension of the preceding note or rest. */
+export function extendNumberedBeat(score: Project, position: Position) {
+  const track = score.tracks.find(({ id }) => id === position.track)
+  if (!track || score.measures[position.bar]?.simile) return
+  const voice = position.voice ?? 0
+  const bars = voiceBars(track, voice)
+  const beats = beatList(score, bars[position.bar], position.bar)
+  const selected = beats[position.beat]
+  if (!selected) return
+  const index = selected.notes.length ? position.beat : Math.max(0, position.beat - 1)
+  const base = beats[index]
+  const slot = beats[index + 1]
+  if (!slot || ticks(slot) !== 960 || base.tuplet || base.triplet || slot.tuplet) return
+  if (!selected.notes.length && position.beat === 0 && slot.notes.length) return
+  const total = ticks(base) + 960
+  const duration = ([2, 1] as const).flatMap((duration) => ([0, 1, 2] as const).map((dots) => ({ duration, dots })))
+    .find((rhythm) => ticks({ ...blank(rhythm.duration), dots: rhythm.dots }) === total)
+  if (!duration) return
+  const removed = new Set(slot.spans?.map(({ id }) => id))
+  const content = beats.slice(0, Math.max(index + 2, beats.findLastIndex((beat) => !beat.draft) + 1))
+  content.splice(index, 2, { ...base, ...duration, draft: false, slur: slot.slur })
+  const changed = bars.map((bar, barIndex) => (barIndex === position.bar ? content : bar).map((beat) =>
+    beat.spans?.some(({ id }) => removed.has(id)) ? { ...beat, spans: beat.spans.filter(({ id }) => !removed.has(id)) } : beat))
+  const updated = voice ? { ...track, voices: track.voices?.map((item, index) =>
+    index === voice - 1 ? { ...item, bars: changed } : item) } : { ...track, bars: changed }
+  return { score: { ...score, tracks: score.tracks.map((item) => item === track ? updated : item) }, beat: index }
+}
 export function clearMeasureContents(score: Project, position: Position, indices: readonly number[]): Project {
   const track = score.tracks.find(({ id }) => id === position.track)
   if (!track) return score
@@ -257,6 +295,10 @@ const creditsValid = (value: unknown) => value === undefined || object(value) &&
   ['subtitle', 'lyricist', 'composer', 'arranger', 'engraver'].every((key) => value[key] === undefined || string(value[key]))
 const modeValid = (value: unknown): value is Mode => typeof value === 'string' && Object.hasOwn(modes, value)
 const layoutValid = (value: unknown) => object(value) && number(value.barsPerLine, 1, 12) &&
+  (value.trackGap === undefined || number(value.trackGap, 0, 100)) &&
+  (value.numberedKey === undefined || object(value.numberedKey) && flag(value.numberedKey.hidden)
+    && (value.numberedKey.x === undefined || number(value.numberedKey.x, -120, 120))
+    && (value.numberedKey.y === undefined || number(value.numberedKey.y, -120, 120))) &&
   number(value.systemsPerPage, 1, 6) && (value.mode === undefined || modeValid(value.mode)) &&
   (value.paper === undefined || validPaper(value.paper)) &&
   flag(value.compressRests) && flag(value.showPageNumbers) &&
@@ -293,8 +335,10 @@ export function parseProject(raw: string): Project {
     || (data.watermark !== undefined && !string(data.watermark, watermarkMaxLength)) || !watermarkStyleValid(data.watermarkStyle)
     || !number(data.bpm, 20, 300) || !number(data.key, -7, 7) || !Array.isArray(data.meter) || !meterValid(data.meter)
     || !number(data.pickup, 0, data.meter[0] - 1) || !layoutValid(data.layout) || !Array.isArray(data.measures)
-    || (data.intro !== undefined && (!Array.isArray(data.intro) || data.intro.length !== 2
-      || !number(data.intro[0], 0, data.measures.length - 1) || !number(data.intro[1], data.intro[0], data.measures.length - 1)))
+    || (data.intro !== undefined && (!Array.isArray(data.intro) || ![2, 4].includes(data.intro.length)
+      || !number(data.intro[0], 0, data.measures.length - 1) || !number(data.intro[1], data.intro[0], data.measures.length - 1)
+      || data.intro.slice(2).some((tick) => tick !== null && (typeof tick !== 'number' || !Number.isFinite(tick) || tick < 0))
+      || data.intro[0] === data.intro[1] && typeof data.intro[2] === 'number' && typeof data.intro[3] === 'number' && data.intro[2] >= data.intro[3]))
     || !number(data.measures.length, 1, 256) || !data.measures.every((m) => object(m) && flag(m.start) && flag(m.end)
       && (m.meter === undefined || meterValid(m.meter)) && (m.key === undefined || number(m.key, -7, 7))
       && (m.bpm === undefined || number(m.bpm, 20, 300)) && (m.repeatCount === undefined || number(m.repeatCount, 2, 8))

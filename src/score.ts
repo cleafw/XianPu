@@ -241,13 +241,14 @@ export function drawScore(element: HTMLElement, project: Project, part: string |
   onReady?: () => void, onError?: (error: Error) => void, print = false) {
   const settings = scoreSettings()
   settings.display.scale = scale
+  settings.display.trackStaffPaddingBetween = project.layout.trackGap ?? settings.display.trackStaffPaddingBetween
   const { score, tracks } = buildScore(project, part, settings, language)
   if (print && part && !project.intro && tracks[0]?.layout.compressRests && !tracks[0].layout.pageBreaks?.length && !tracks[0].layout.systemBreaks?.length && !project.measures.some((measure) => measure.simile || measure.rehearsal || measure.directions?.length) &&
     ![tracks[0].bars, ...tracks[0].voices?.map((voice) => voice.bars) ?? []].some((bars) =>
       bars.some((bar) => bar.some((beat) => !beat.notes.length && (beat.marks?.length || beat.spans?.length || beat.lyric || beat.verses?.some(Boolean) || beat.chord || beat.diagram))))) {
     score.stylesheet.perTrackMultiBarRest = new Set([0])
   }
-  reserveMarkSpace(settings, tracks)
+  reserveMarkSpace(settings, tracks, project.layout.numberedKey)
   const api = new AlphaTabApi(element, settings)
   enableNumberedNotation(score)
   if (!score.stylesheet.perTrackMultiBarRest?.size) {
@@ -258,7 +259,7 @@ export function drawScore(element: HTMLElement, project: Project, part: string |
     const footer = element.querySelector('.at-surface > div:last-child > svg')
     // Leave alphaTab's layout placeholder in place for subsequent resizes.
     if (footer?.textContent?.trim() === 'rendered by alphaTab') footer.remove()
-    engraveMarks(element, api.boundsLookup, tracks, scale, (beat) => sourceIndexes.get(beat)?.data, project.intro)
+    engraveMarks(element, api.boundsLookup, tracks, scale, (beat) => sourceIndexes.get(beat)?.data, project.intro, project.layout.numberedKey)
     if (!print) {
       element.querySelector(':scope > .score-watermark')?.remove()
       const watermark = createScoreWatermark(project)

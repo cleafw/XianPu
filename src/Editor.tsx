@@ -10,9 +10,10 @@ type Entry = { duration: Duration; dots: Beat['dots']; triplet: boolean; octave:
 const initial: Entry = { duration: 4, dots: 0, triplet: false, octave: 0, string: 1 }
 const longValues = [{ duration: 4, dots: 0 }, { duration: 2, dots: 0 }, { duration: 2, dots: 1 }, { duration: 1, dots: 0 }] as const
 
-export function Editor({ score, track, position, mode, beat, edit, putSpan, removeSpan, putTuplet, next, previous, suspended = false, editDraftRest = false }: {
+export function Editor({ score, track, position, mode, beat, edit, putSpan, removeSpan, putTuplet, next, previous, extendBeat, suspended = false, editDraftRest = false }: {
   score: Project; track: Track; position: Position; mode: Mode; beat: Beat;
   editDraftRest?: boolean;
+  extendBeat: () => boolean;
   edit: (fn: (b: Beat) => Beat) => void; putSpan: (from: Position, to: Position, span: SpanEnd) => boolean; removeSpan: (id: string) => void; putTuplet: (from: Position, to: Position, ratio?: [number, number]) => boolean; next: () => void; previous: () => void; suspended?: boolean
 }) {
   const { language, t } = useLanguage()
@@ -136,6 +137,9 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
       } else if (key === '[' || key === ']') {
         event.preventDefault()
         stepRhythm(key === '[' ? 1 : -1)
+      } else if (key === '-' && mode === 'numbered') {
+        event.preventDefault()
+        if (!event.repeat) setError(extendBeat() ? '' : '需要同一小节内相邻的四分音符或四分休止，且延长后的时值可以用增时线表示。')
       } else if (key === 'arrowright' || key === 'arrowleft') {
         event.preventDefault()
         if (key === 'arrowright') next()

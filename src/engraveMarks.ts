@@ -1,5 +1,5 @@
 import { model, type AlphaTabApi, type Settings } from '@coderline/alphatab'
-import type { Beat, Project, Track } from './model'
+import type { Beat, NumberedKeyLayout, Project, Track } from './model'
 import { markSymbol } from './markGlyphs'
 import { pairedSpans, type ScoreMark, type SpanEnd, type SpanKind } from './notationMarks'
 
@@ -9,7 +9,7 @@ const svgNs = 'http://www.w3.org/2000/svg'
 const markLayer = 'xianpu-marks'
 const rowHeight = 18
 
-export function reserveMarkSpace(settings: Settings, tracks: readonly Track[]) {
+export function reserveMarkSpace(settings: Settings, tracks: readonly Track[], defaultKey?: NumberedKeyLayout) {
   let above = 0
   let below = 0
   for (const bars of tracks.flatMap((track) => [track.bars, ...track.voices?.map((voice) => voice.bars) ?? []])) {
@@ -41,9 +41,14 @@ export function reserveMarkSpace(settings: Settings, tracks: readonly Track[]) {
     }
   }
   const display = settings.display
-  if (above) {
-    display.firstNotationStaffPaddingTop += above + 6
-    display.notationStaffPaddingTop += above + 6
+  const keyAbove = Math.max(0, ...tracks.map((track) => {
+    const key = track.layout.numberedKey ?? defaultKey
+    return key?.hidden ? 0 : -(key?.y ?? 0)
+  }))
+  if (above || keyAbove) {
+    const extra = above + keyAbove + 28
+    display.firstNotationStaffPaddingTop += extra
+    display.notationStaffPaddingTop += extra
   }
   if (below) {
     display.lastNotationStaffPaddingBottom += below + 6
@@ -55,7 +60,7 @@ type Lookup = NonNullable<AlphaTabApi['boundsLookup']>
 type StaffBar = Lookup['staffSystems'][number]['bars'][number]['bars'][number]
 type BeatBounds = StaffBar['beats'][number]
 type Box = { left: number; right: number; top: number; bottom: number }
-type Fragment = { group: SVGGElement; x: number; y: number; width: number; height: number; occupied: Box[] }
+type Fragment = { source: SVGSVGElement; group: SVGGElement; x: number; y: number; width: number; height: number; occupied: Box[] }
 type Anchor = { system: number; first: BeatBounds; last: BeatBounds; data: Beat }
 type Lane = { fragment: Fragment; first: StaffBar; last: StaffBar }
 let measureContext: CanvasRenderingContext2D | null = null
@@ -87,6 +92,7 @@ function labelInk(text: SVGTextElement, maxWidth = Infinity): Box {
   const { fontStyle, fontWeight, fontSize, fontFamily } = getComputedStyle(text)
   context.font = `${fontStyle} ${fontWeight} ${fontSize} ${fontFamily}`
   context.textAlign = 'center'
+  context.textBaseline = 'alphabetic'
   const metrics = context.measureText(text.textContent ?? '')
   const width = metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight
   const fit = width > maxWidth ? maxWidth / width : 1
@@ -102,21 +108,90 @@ function labelInk(text: SVGTextElement, maxWidth = Infinity): Box {
 
 function place(fragment: Fragment, box: Box, below: boolean, scale: number) {
   const gap = 2 * scale
-  let move = 0
-  // Move outward past every overlapping label or line.
   const adjacent = fragment.occupied.filter((other) => box.left < other.right + gap && box.right > other.left - gap)
-  for (let pass = 0; pass < adjacent.length; pass++) {
-    const before = move
-    for (const other of adjacent) {
-      if (box.top + move < other.bottom + gap && box.bottom + move > other.top - gap) {
-        move = below ? other.bottom + gap - box.top : other.top - gap - box.bottom
-      }
-    }
-    if (move === before) break
-  }
-  move = Math.max(gap - box.top, Math.min(fragment.height - gap - box.bottom, move))
+  const min = gap - box.top
+  const max = fragment.height - gap - box.bottom
+  const natural = Math.max(min, Math.min(max, 0))
+  const fits = (move: number) => move >= min && move <= max && adjacent.every((other) =>
+    box.bottom + move <= other.top - gap + 1e-5 || box.top + move >= other.bottom + gap - 1e-5)
+  const positions = [natural, ...adjacent.flatMap((other) => [other.top - gap - box.bottom, other.bottom + gap - box.top])]
+    .filter(fits).sort((a, b) => Math.abs(a) - Math.abs(b))
+  const move = positions.find((offset) => below ? offset >= natural : offset <= natural) ?? positions[0] ?? natural
   fragment.occupied.push({ ...box, top: box.top + move, bottom: box.bottom + move })
   return move
+}
+
+function nativeInk(fragment: Fragment, text: SVGTextElement): Box | undefined {
+  const transform = text.getCTM()
+  const root = fragment.source.getCTM()
+  if (!transform || !root) return
+  const local = root.inverse().multiply(transform)
+  const style = getComputedStyle(text)
+  const context = measureContext ??= document.createElement('canvas').getContext('2d')!
+  context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+  context.textAlign = style.textAnchor === 'middle' ? 'center' : style.textAnchor === 'end' ? 'right' : 'left'
+  context.textBaseline = style.dominantBaseline === 'hanging' ? 'hanging'
+    : style.dominantBaseline === 'middle' || style.dominantBaseline === 'central' ? 'middle' : 'alphabetic'
+  const ink = context.measureText(text.textContent ?? '')
+  const x = text.x.baseVal.numberOfItems ? text.x.baseVal.getItem(0).value : 0
+  const y = text.y.baseVal.numberOfItems ? text.y.baseVal.getItem(0).value : 0
+  const topLeft = new DOMPoint(x - ink.actualBoundingBoxLeft, y - ink.actualBoundingBoxAscent).matrixTransform(local)
+  const bottomRight = new DOMPoint(x + ink.actualBoundingBoxRight, y + ink.actualBoundingBoxDescent).matrixTransform(local)
+  return { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y }
+}
+
+const keyCaption = /^[16]\s*=\s*[a-g]\s*$/i
+const accidental = /^[\ue260-\ue264]$/
+
+function arrangeNativeLabels(fragment: Fragment, system: Lookup['staffSystems'][number], tracks: readonly Track[],
+  defaultKey: NumberedKeyLayout | undefined, scale: number) {
+  const texts = [...fragment.source.querySelectorAll('text')]
+  const keys = texts.filter((text) => keyCaption.test(text.textContent ?? '') && !text.hasAttribute('text-anchor')
+    && text.style.fontFamily.includes('Arial'))
+  for (const text of texts) {
+    const value = text.textContent?.trim() ?? ''
+    const chord = text.style.fontStyle === 'italic' && text.getAttribute('text-anchor') === 'middle'
+    if (!/^=\s*\d/.test(value) && !/^[\ue080-\ue09f\ueca0-\uecaf]$/.test(value) &&
+      !/^[0-9]+$/.test(value) && !chord) continue
+    const ink = nativeInk(fragment, text)
+    if (ink) fragment.occupied.push(ink)
+  }
+  const numbered = system.bars.flatMap(({ bars }) => bars.filter((entry) => entry.bar.staff.showNumbered))
+  for (const text of keys) {
+    let group = text.parentElement as Element | null
+    if (!group?.hasAttribute('data-numbered-key')) {
+      group = svg('g', { 'data-numbered-key': '' })
+      const next = text.nextElementSibling
+      text.before(group)
+      group.append(text)
+      if (next?.matches('g.at') && accidental.test(next.textContent ?? '')) group.append(next)
+    }
+    group.removeAttribute('display')
+    group.removeAttribute('transform')
+    const ink = nativeInk(fragment, text)
+    if (!ink) continue
+    const x = ink.left + fragment.x
+    const y = ink.bottom + fragment.y
+    const staff = numbered.reduce<StaffBar | undefined>((best, candidate) => {
+      const bounds = candidate.realBounds
+      if (x < bounds.x - 8 * scale || x > bounds.x + bounds.w || y > bounds.y + 3 * scale) return best
+      return !best || bounds.y < best.realBounds.y ? candidate : best
+    }, undefined)
+    const index = staff?.bar.staff.track.index
+    const options = (index === undefined ? undefined : tracks[index]?.layout.numberedKey) ?? defaultKey
+    if (options?.hidden) {
+      group.setAttribute('display', 'none')
+      continue
+    }
+    const other = group.querySelector<SVGTextElement>('g.at text')
+    const sign = other && nativeInk(fragment, other)
+    const box = sign ? { left: Math.min(ink.left, sign.left), right: Math.max(ink.right, sign.right),
+      top: Math.min(ink.top, sign.top), bottom: Math.max(ink.bottom, sign.bottom) } : ink
+    const dx = Math.max(2 - box.left, Math.min(fragment.width - 2 - box.right, (options?.x ?? 0) * scale))
+    const dy = (options?.y ?? 0) * scale
+    const move = place(fragment, { left: box.left + dx, right: box.right + dx, top: box.top + dy, bottom: box.bottom + dy }, false, scale)
+    if (dx || dy + move) group.setAttribute('transform', `translate(${dx} ${dy + move})`)
+  }
 }
 
 function pointMark(fragment: Fragment, anchor: Anchor, mark: ScoreMark, scale: number) {
@@ -223,14 +298,20 @@ function rangeSegment(lane: Lane, span: SpanEnd, x1: number, x2: number, first: 
   group.setAttribute('transform', `translate(0 ${y})`)
 }
 
-function introParenthesis(fragment: Fragment, bar: StaffBar, opening: boolean, scale: number) {
-  const beat = opening ? bar.beats[0] : bar.beats.at(-1)
+function introParenthesis(fragment: Fragment, bar: StaffBar, opening: boolean, scale: number, tick?: number | null) {
+  const beats = bar.beats.filter(({ beat }) => beat.voice.index === 0 && !beat.graceType)
+  const beat = opening
+    ? (tick == null ? bar.beats[0] : beats.find(({ beat }) => beat.displayEnd > tick + 1e-5)) ?? beats.at(-1)
+    : (tick == null ? undefined : beats.findLast(({ beat }) => beat.displayStart < tick - 1e-5)) ?? beats.at(-1)
+  const next = beat && beats[beats.indexOf(beat) + 1]
   const heads = beat?.notes?.map(({ noteHeadBounds }) => noteHeadBounds) ?? []
-  const staff = bar.visualBounds
+  const staff = bar.realBounds
   const notesX = beat?.onNotesX ?? staff.x + staff.w / 2
   const edge = opening
     ? Math.min(beat?.visualBounds.x ?? notesX - 5 * scale, ...heads.map(({ x }) => x))
-    : Math.max(notesX + 5 * scale, ...heads.map(({ x, w }) => x + w))
+    : tick == null || !next ? staff.x + staff.w
+      : Math.max(notesX + 5 * scale, ...heads.map(({ x, w }) => x + w),
+        beat.beat.displayDuration > 960 ? next.visualBounds.x - 8 * scale : 0)
   const x = Math.max(staff.x + 7 * scale, Math.min(staff.x + staff.w - 7 * scale, edge + (opening ? -2 : 2) * scale)) - fragment.x
   const center = staff.y + staff.h / 2
   const top = Math.max(2, Math.min(center - 9 * scale, ...heads.map(({ y }) => y - 3 * scale)) - fragment.y)
@@ -247,11 +328,12 @@ function introParenthesis(fragment: Fragment, bar: StaffBar, opening: boolean, s
 
 /** Add cloneable SVG to alphaTab's rendered system fragments before pagination. */
 export function engraveMarks(element: HTMLElement, lookup: Lookup | null, tracks: readonly Track[], scale: number,
-  sourceData: (beat: BeatBounds['beat']) => Beat | undefined, intro?: Project['intro']) {
+  sourceData: (beat: BeatBounds['beat']) => Beat | undefined, intro?: Project['intro'], defaultKey?: NumberedKeyLayout) {
   const surface = element.querySelector('.at-surface')
   if (!surface || !lookup) return
   surface.querySelectorAll(`.${markLayer}`).forEach((layer) => layer.remove())
-  if (!intro && !tracks.some((track) => [track.bars, ...track.voices?.map((voice) => voice.bars) ?? []].some((bars) =>
+  const numbered = lookup.staffSystems.some((system) => system.bars.some(({ bars }) => bars.some(({ bar }) => bar.staff.showNumbered)))
+  if (!intro && !numbered && !tracks.some((track) => [track.bars, ...track.voices?.map((voice) => voice.bars) ?? []].some((bars) =>
     bars.some((bar) => bar.some((beat) => beat.marks?.length || beat.spans?.length))))) return
 
   const fragments = new Map<number, Fragment>()
@@ -259,7 +341,7 @@ export function engraveMarks(element: HTMLElement, lookup: Lookup | null, tracks
     const wrapper = source.parentElement!
     const y = parseFloat(wrapper.style.top)
     const x = parseFloat(wrapper.style.left)
-    fragments.set(y, { group: svg('g', { class: markLayer, fill: '#171717', 'pointer-events': 'none' }),
+    fragments.set(y, { source, group: svg('g', { class: markLayer, fill: '#171717', 'pointer-events': 'none' }),
       x, y, width: source.width.baseVal.value, height: source.height.baseVal.value, occupied: [] })
     source.append(fragments.get(y)!.group)
   }
@@ -271,6 +353,7 @@ export function engraveMarks(element: HTMLElement, lookup: Lookup | null, tracks
     const top = system.visualBounds.y
     const fragment = [...fragments.values()].find(({ y, height }) => top >= y && top < y + height)
     if (!fragment) continue
+    arrangeNativeLabels(fragment, system, tracks, defaultKey, scale)
     for (const master of system.bars) {
       if (intro && (master.index === intro[0] || master.index === intro[1])) {
         const firstStaffByTrack = new Map<number, StaffBar>()
@@ -280,8 +363,8 @@ export function engraveMarks(element: HTMLElement, lookup: Lookup | null, tracks
           if (!first || staff.realBounds.y < first.realBounds.y) firstStaffByTrack.set(track, staff)
         }
         for (const staff of firstStaffByTrack.values()) {
-          if (master.index === intro[0]) introParenthesis(fragment, staff, true, scale)
-          if (master.index === intro[1]) introParenthesis(fragment, staff, false, scale)
+          if (master.index === intro[0]) introParenthesis(fragment, staff, true, scale, intro[2])
+          if (master.index === intro[1]) introParenthesis(fragment, staff, false, scale, intro[3])
         }
       }
       for (const modelBar of new Set(master.bars.map(({ bar }) => bar))) {

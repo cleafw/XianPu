@@ -17,9 +17,9 @@ import { SoundEditor } from './SoundEditor'
 import { NavigationEditor, navigationMessage } from './NavigationEditor'
 import { resolveScoreNavigation } from './scoreNavigation'
 import { paperDimensions, paperMargin } from './paper'
-import { beatList, beatRange, blank, changeBeat, clearMeasureContents, createProject, createTrack, defaultWatermarkStyle, keyNames, kinds, measureDifference, measureSettings, modes, paperFor, parseProject,
-  pitchNames, shiftedEndings, shiftedIntro, shiftedLayout, techniqueGroups, voiceBars, watermarkLimits, watermarkMaxLength,
-  type Beat, type Kind, type Layout, type Measure, type Mode, type Position, type Project, type Track, type WatermarkStyle } from './model'
+import { beatList, beatRange, blank, changeBeat, clearMeasureContents, createProject, createTrack, defaultWatermarkStyle, extendNumberedBeat, keyNames, kinds, measureDifference, measureSettings, modes, paperFor, parseProject,
+  pitchNames, shiftedEndings, shiftedIntro, shiftedLayout, techniqueGroups, ticks, voiceBars, watermarkLimits, watermarkMaxLength,
+  type Beat, type IntroRange, type Kind, type Layout, type Measure, type Mode, type Position, type Project, type Track, type WatermarkStyle } from './model'
 import { playScore, stopPlayback } from './playback'
 import { copyMeasures, pasteMeasures, type MeasureClipboard, type PasteMode } from './measureClipboard'
 import * as storage from './storage'
@@ -117,7 +117,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [playhead, setPlayhead] = useState<Position | null>(null)
   const [audioState, setAudioState] = useState<'idle' | 'loading' | 'playing'>('idle')
   const [panel, setPanel] = useState<'settings' | 'intro' | 'export' | 'track' | 'paper' | 'sounds' | 'remove-part' | 'midi-report' | null>(null)
-  const [introDraft, setIntroDraft] = useState<[number, number]>([0, 0])
+  const [introDraft, setIntroDraft] = useState<IntroRange>([0, 0])
   const [partToRemove, setPartToRemove] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<(() => void) | null>(null)
   const pendingConfirmation = useRef<(() => void) | null>(null)
@@ -585,6 +585,21 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     commit((score) => ({ ...score, intro }))
     setPanel(null)
   }
+  function setIntroBar(endpoint: 0 | 1, bar: number) {
+    setIntroDraft(([first, last, start, end]) => {
+      const nextFirst = endpoint === 0 ? bar : Math.min(first, bar)
+      const nextLast = endpoint === 1 ? bar : Math.max(last, bar)
+      return [nextFirst, nextLast, nextFirst === first ? start ?? null : null, nextLast === last ? end ?? null : null]
+    })
+  }
+  function extendBeat() {
+    if (!project) return false
+    const result = extendNumberedBeat(project, position)
+    if (!result) return false
+    commit(() => result.score)
+    selectBeat({ ...position, beat: result.beat, note: undefined, string: undefined })
+    return true
+  }
   function addVoice(staff: 0 | 1) {
     if (!project || !track || (track.voices?.length ?? 0) >= 3) return
     const voice = (track.voices?.length ?? 0) + 1
@@ -805,7 +820,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                 </div>
                 <div className="position-header measure-structure">
                   {barMeterField('本小节起变拍')}
-                  <button onClick={openIntro}>{t('前奏括号')}{project.intro && ' · ' + project.intro.map((index) => index + 1).join('–')}</button>
+                  <button onClick={openIntro}>{t('前奏括号')}{project.intro && ` · ${project.intro[0] + 1}–${project.intro[1] + 1}`}</button>
                 </div>
                 <div className="measure-list" aria-label={t('选择小节')} {...measureDrag.handlers} onPointerDown={(event) => {
                   const target = measureButton(eventElement(event.target))
@@ -849,7 +864,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         </section>
         <PanelsSuspended.Provider value={!!(panel || confirm || pasteWarning || busy)}>
         {track && <Editor suspended={!!(panel || confirm || pasteWarning || barMenu)} score={project} track={track} position={position} mode={entryMode} beat={beat} editDraftRest={!!selection.editDraftRest}
-          edit={(edit) => commit((score) => changeBeat(score, position, edit))} putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} />}
+          edit={(edit) => commit((score) => changeBeat(score, position, edit))} putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} extendBeat={extendBeat} />}
         </PanelsSuspended.Provider>
         {(panel || confirm || pasteWarning || barMenu) && <div className="inspector inspector-placeholder" aria-hidden="true" />}
         {track && !(panel || confirm || pasteWarning || barMenu) && <PanelWidthHandle label={t('调整右侧栏宽度')} side="left"
@@ -901,19 +916,43 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         onApply={(paper) => { patchLayout({ paper }); setPanel(null) }} />
     </Modal>}
     {project && panel === 'intro' && <Modal title={t('前奏括号')} close={() => setPanel(null)}>
-      <p>{t('选择前奏的起止小节。括号随总谱、分谱一起显示和导出。')}</p>
+      <p>{t('选择前奏的起止小节，也可以精确到音符。括号随总谱、分谱一起显示和导出。')}</p>
       <div className="field-row">
-        {(['起始小节', '结束小节'] as const).map((label, endpoint) => <label key={label}>{t(label)}
-          <select value={introDraft[endpoint]} onChange={(event) => {
-            const bar = Number(event.target.value)
-            setIntroDraft(([first, last]) => endpoint ? [Math.min(first, bar), bar] : [bar, Math.max(last, bar)])
-          }}>
-            {project.measures.map((_, index) => <option value={index} key={index}>{index + 1}</option>)}
-          </select>
-        </label>)}
+        {([0, 1] as const).map((endpoint) => {
+          const bar = introDraft[endpoint]
+          const selectedTick = introDraft[endpoint + 2]
+          let time = 0
+          const options = track ? beatList(project, voiceBars(track, activeVoice)[bar], bar).map((beat, index) => {
+            const start = time
+            time += ticks(beat)
+            const description = beat.notes.map(({ midi }) => pitchNames[midi % 12] + (Math.floor(midi / 12) - 1)).join(' / ') || t('休止')
+            return { index, time: endpoint ? time : start, description }
+          }) : []
+          return <div className="intro-endpoint" key={endpoint}>
+            <label>{t(endpoint ? '结束小节' : '起始小节')}
+              <select value={bar} onChange={(event) => setIntroBar(endpoint, Number(event.target.value))}>
+                {project.measures.map((_, index) => <option value={index} key={index}>{index + 1}</option>)}
+              </select>
+            </label>
+            <label>{t(endpoint ? '结束音符' : '起始音符')}
+              <select value={selectedTick ?? ''} onChange={(event) => {
+                const value = event.target.value
+                setIntroDraft(([first, last, start, end]) => endpoint
+                  ? [first, last, start ?? null, value === '' ? null : Number(value)]
+                  : [first, last, value === '' ? null : Number(value), end ?? null])
+              }}>
+                <option value="">{t(endpoint ? '小节末尾' : '小节开头')}</option>
+                {selectedTick != null && !options.some(({ time }) => time === selectedTick) &&
+                  <option value={selectedTick}>{t('已保存的拍位')}</option>}
+                {options.map(({ index, time, description }) => <option value={time} key={index}>{index + 1} · {description}</option>)}
+              </select>
+            </label>
+          </div>
+        })}
       </div>
       <div className="tool-actions">
-        <button className="primary" onClick={() => saveIntro(introDraft)}>{t('应用前奏括号')}</button>
+        <button className="primary" disabled={introDraft[0] === introDraft[1] && (introDraft[2] ?? -1) >= (introDraft[3] ?? Infinity)}
+          onClick={() => saveIntro(introDraft[2] != null || introDraft[3] != null ? [introDraft[0], introDraft[1], introDraft[2] ?? null, introDraft[3] ?? null] : [introDraft[0], introDraft[1]])}>{t('应用前奏括号')}</button>
       </div>
       {project.intro && <div className="tool-actions tool-actions-danger">
         <button onClick={() => saveIntro()}>{t('移除前奏括号')}</button>
@@ -937,6 +976,31 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         <label>{t('速度 BPM')}<input type="number" key={project.bpm} defaultValue={project.bpm} min={20} max={300}
           onBlur={(e) => { const bpm = Math.min(300, Math.max(20, Number(e.target.value) || project.bpm)); if (bpm !== project.bpm) commit((score) => ({ ...score, bpm })) }} /></label>
       </div>
+      <fieldset><legend>{t('调号与分谱间距')}</legend>
+        <div className="field-row">
+          <label>{t('总谱分谱间距')}<input type="number" min={0} max={100} key={project.layout.trackGap}
+            defaultValue={project.layout.trackGap ?? 5} onBlur={(event) => {
+              const trackGap = Math.max(0, Math.min(100, Math.round(event.target.valueAsNumber || 0)))
+              if (trackGap !== (project.layout.trackGap ?? 5)) commit((score) => ({ ...score, layout: { ...score.layout, trackGap } }))
+              else event.target.value = String(trackGap)
+            }} /></label>
+          {(['x', 'y'] as const).map((axis) => {
+            const keyLayout = viewLayout?.numberedKey ?? project.layout.numberedKey
+            const offset = keyLayout?.[axis] ?? 0
+            return <label key={axis}>{t(axis === 'x' ? '简谱调号水平偏移' : '简谱调号垂直偏移')}
+              <input type="number" min={-120} max={120} key={offset} defaultValue={offset} onBlur={(event) => {
+                const value = Math.max(-120, Math.min(120, Math.round(event.target.valueAsNumber || 0)))
+                if (value !== offset) patchLayout({ numberedKey: { ...keyLayout, [axis]: value } })
+                else event.target.value = String(value)
+              }} />
+            </label>
+          })}
+        </div>
+        <label className="checkbox"><input type="checkbox" checked={!(viewLayout?.numberedKey ?? project.layout.numberedKey)?.hidden}
+          onChange={(event) => patchLayout({ numberedKey: { ...(viewLayout?.numberedKey ?? project.layout.numberedKey), hidden: !event.target.checked } })} />
+          {t('显示简谱调号')}</label>
+        {activePart && viewLayout?.numberedKey && <button onClick={() => patchLayout({ numberedKey: undefined })}>{t('简谱调号跟随总谱')}</button>}
+      </fieldset>
       <label>{t('弱起 · 首小节拍数')}<select value={project.pickup} onChange={(e) => commit((score) => ({ ...score, pickup: Number(e.target.value) }))}>
         <option value={0}>{t('无弱起')}</option>{Array.from({ length: project.meter[0] - 1 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}</select></label>
       <fieldset><legend>{t('第 {bar} 小节的调号、拍号与速度', { bar: barIndex + 1 })}</legend><div className="field-row">

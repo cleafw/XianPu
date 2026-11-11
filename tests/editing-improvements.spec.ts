@@ -148,6 +148,54 @@ test('adds bamboo flute symbols from the grid and list and prints the same signs
   await expect(paper.locator('[data-code=fluteZeng] text')).toHaveText('贝')
 })
 
+test('keeps notation marks clear of numbered key labels and saves part spacing and key visibility', async ({ page }) => {
+  const project = createProject('demo')
+  project.key = -2
+  project.meter = [3, 4]
+  const first = project.tracks[0]
+  first.bars = first.bars.map((bar) => bar.slice(0, 3))
+  const second = structuredClone(first)
+  second.id = 'second-numbered'
+  second.name = '笛子'
+  project.tracks = [first, second]
+  first.bars[0][0].marks = [{ id: 'key-clearance', code: 'text', text: '技巧', place: 'above', dx: -27, dy: 0 }]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'key-clearance.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const keys = page.locator('.canvas [data-numbered-key]')
+  await expect(keys).toHaveCount(2)
+  const mark = page.locator('.canvas [data-mark=key-clearance] text')
+  const markBox = (await mark.boundingBox())!
+  const keyBox = (await keys.first().locator(':scope > text').boundingBox())!
+  const chordBox = (await page.locator('.canvas svg text[text-anchor="middle"]').filter({ hasText: /^C$/ }).first().boundingBox())!
+  const overlapsKey = (box: typeof keyBox) => box.x + box.width > keyBox.x + 2 && keyBox.x + keyBox.width > box.x + 2 &&
+    box.y + box.height > keyBox.y + 2 && keyBox.y + keyBox.height > box.y + 2
+  expect(overlapsKey(markBox)).toBe(false)
+  expect(overlapsKey(chordBox)).toBe(false)
+  const spacing = async () => {
+    const [upper, lower] = await keys.locator(':scope > text').evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().top))
+    return lower - upper
+  }
+  const before = await spacing()
+  const settings = page.getByRole('button', { name: '曲谱设置', exact: true })
+  const close = page.getByRole('dialog').getByRole('button', { name: '关闭' })
+  await settings.click()
+  await page.getByLabel('总谱分谱间距').fill('55')
+  await page.getByLabel('总谱分谱间距').press('Tab')
+  await close.click()
+  await expect.poll(spacing).toBeGreaterThan(before + 40)
+  const sidebar = page.getByRole('navigation')
+  await sidebar.getByRole('button', { name: '笛子', exact: true }).click()
+  await settings.click()
+  await page.getByRole('checkbox', { name: '显示简谱调号' }).uncheck()
+  await close.click()
+  await sidebar.getByRole('button', { name: '总谱', exact: true }).click()
+  await expect(page.locator('.canvas [data-numbered-key]:visible')).toHaveCount(1)
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  await expect(page.getByRole('dialog').locator('.print-page [data-numbered-key]:visible')).toHaveCount(1)
+})
+
 test('writes printable marks, a pitched grace note, and a cross-system range', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '打开弹唱示例' }).click()

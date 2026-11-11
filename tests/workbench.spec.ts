@@ -209,6 +209,32 @@ test('changes meter at a chosen bar and keeps the intro parentheses aligned thro
   await expect(score.locator('[data-intro-parenthesis]')).toHaveCount(0)
 })
 
+test('places the intro endpoint after the last note by default and supports a partial measure', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await page.getByRole('navigation').getByRole('button', { name: '简谱', exact: true }).click()
+  const toggle = page.getByRole('button', { name: /^前奏括号/ })
+  const dialog = page.getByRole('dialog', { name: '前奏括号' })
+  const apply = dialog.getByRole('button', { name: '应用前奏括号' })
+  const bounds = () => page.locator('.canvas [data-intro-parenthesis=end]').evaluate((path) => {
+    const staff = (path as SVGPathElement).ownerSVGElement!
+    const letterX = (lyric: string) => Number([...staff.querySelectorAll('text')].findLast((text) => text.textContent === lyric)?.getAttribute('x'))
+    return { end: (path as SVGPathElement).getBBox().x, first: letterX('晚'), second: letterX('风'), last: letterX('轻') }
+  })
+  await toggle.click()
+  await apply.click()
+  await expect.poll(async () => { const x = await bounds(); return x.end > x.last }).toBe(true)
+  await toggle.click()
+  await dialog.getByLabel('起始音符').selectOption('720')
+  await dialog.getByLabel('结束音符').selectOption('960')
+  await apply.click()
+  await expect.poll(async () => { const x = await bounds(); return x.end > x.second && x.end < x.last }).toBe(true)
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '保存 •' }).click()
+  const saved = parseProject(await readFile((await (await download).path())!, 'utf8'))
+  expect(saved.intro).toEqual([0, 0, 720, 960])
+})
+
 test('renames a part in place and uses the new name in notation, export and saved projects', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '打开弹唱示例' }).click()

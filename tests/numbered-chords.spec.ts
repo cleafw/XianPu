@@ -2,6 +2,26 @@ import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { blank, createProject, parseProject } from '../src/model'
 
+test('uses the minus key to turn a selected rest or the following note into an extension dash', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.tracks[0].bars[0] = [60, 0, 64, 65].map((midi) => ({ ...blank(), draft: false, notes: midi ? [{ midi }] : [] }))
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'dash.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  await page.getByRole('button', { name: '简谱位置 2', exact: true }).click()
+  await page.keyboard.press('-')
+  await expect(page.getByText('第 1 小节 · 位置 1', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '简谱位置 2', exact: true }).click()
+  await page.keyboard.press('-')
+  await expect(page.getByRole('button', { name: '第 1 小节，拍数完整' })).toBeVisible()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '保存 •' }).click()
+  const saved = parseProject(await readFile((await (await download).path())!, 'utf8'))
+  expect(saved.tracks[0].bars[0].map(({ duration, notes }) => [duration, notes[0].midi])).toEqual([[2, 60], [2, 64]])
+})
+
 test('edits the time value of a clicked numbered rest and keeps the lines in export', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: /简谱弹唱/ }).click()
