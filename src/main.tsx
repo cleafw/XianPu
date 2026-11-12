@@ -357,17 +357,11 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       if (event.key === 'Delete' && project && track && !panel && !confirm && !pasteWarning && !barMenu &&
         !busy && !textInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
         event.preventDefault()
-        if (noteTargets.length) {
-          if (event.repeat) return
-          const cleared = clearSelectedNotes(project, noteTargets)
-          if (cleared !== project) commit(() => cleared)
-        } else if (measureSelection.length > 1) {
-          if (event.repeat) return
+        if (event.repeat) return
+        if (!noteTargets.length && measureSelection.length > 1) {
           const cleared = clearMeasureContents(project, position, measureSelection)
           if (cleared !== project) commit(() => cleared)
-        } else {
-          commit((score) => changeBeat(score, position, () => blank()))
-        }
+        } else deleteNotes()
         return
       }
       if (!event.ctrlKey && !event.metaKey) return
@@ -449,6 +443,19 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setSelectedNotes([])
     noteAnchor.current = null
   }
+  function deleteNotes() {
+    if (!project) return
+    if (noteTargets.length || entryMode === 'numbered' && position.note !== undefined) {
+      const targets = noteTargets.length ? noteTargets : selectedBeats(project, [position])
+      const cleared = clearSelectedNotes(project, targets)
+      if (cleared !== project) commit(() => cleared)
+      clearNoteSelection()
+      // The stored tone indices can change when a layer is removed.
+      setSelection({ ...position, note: undefined, string: undefined })
+    } else {
+      commit((score) => changeBeat(score, position, () => blank()))
+    }
+  }
   function selectNoteRange(from: Position, to: Position) {
     const item = project?.tracks.find(({ id }) => id === from.track)
     if (!project || !item || !sameVoice(from, to)) return
@@ -458,7 +465,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     noteAnchor.current = from
     setSelectedNotes(beatRange(project, item, from, to).flatMap(({ position, beat }) =>
       !project.measures[position.bar].simile && (!beat.draft || sameBeat(position, from) || sameBeat(position, to))
-        ? [{ ...position, lane: from.lane }] : []))
+        ? [{ ...position, lane: from.lane, note: sameBeat(from, to) ? to.note : undefined }] : []))
     setSelection({ ...to, editDraftRest: true })
   }
   function selectNote(target: Position, event: MouseEvent) {
@@ -1037,6 +1044,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         </section>
         <PanelsSuspended.Provider value={!!(panel || scoreLabel || confirm || pasteWarning || busy)}>
         {track && <Editor suspended={!!(panel || scoreLabel || confirm || pasteWarning || barMenu)} score={project} track={track} position={position} mode={entryMode} beat={beat} editDraftRest={!!selection.editDraftRest}
+          deleteNotes={deleteNotes}
           batch={noteTargets.length ? { beats: noteTargets.map(({ beat }) => beat), changeRhythm: changeSelectedRhythm, changePitch: changeSelectedPitch } : undefined}
           edit={(edit) => { clearNoteSelection(); commit((score) => changeBeat(score, position, edit)) }} putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} extendBeat={extendBeat} />}
         </PanelsSuspended.Provider>

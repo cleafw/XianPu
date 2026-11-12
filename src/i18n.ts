@@ -284,6 +284,7 @@ const english = {
   "依次录入同拍的音，完成后点「下一拍」。": "Enter each note, then select Next beat.",
   "同一拍最多可叠放 16 个音。": "A beat can contain up to 16 stacked notes.",
   "移除所选音": "Remove selected note",
+  "删除选区音符": "Delete selected notes",
   "{string}弦": "String {string}",
   "品位": "Fret",
   "0–36 品": "Frets 0–36",

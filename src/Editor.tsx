@@ -15,10 +15,11 @@ type BatchEdit = {
   changePitch: (amount: number) => TextKey | undefined
 }
 
-export function Editor({ score, track, position, mode, beat, edit, putSpan, removeSpan, putTuplet, next, previous, extendBeat, batch, suspended = false, editDraftRest = false }: {
+export function Editor({ score, track, position, mode, beat, edit, deleteNotes, putSpan, removeSpan, putTuplet, next, previous, extendBeat, batch, suspended = false, editDraftRest = false }: {
   score: Project; track: Track; position: Position; mode: Mode; beat: Beat;
   editDraftRest?: boolean;
   extendBeat: () => boolean;
+  deleteNotes: () => void;
   batch?: BatchEdit;
   edit: (fn: (b: Beat) => Beat) => void; putSpan: (from: Position, to: Position, span: SpanEnd) => boolean; removeSpan: (id: string) => void; putTuplet: (from: Position, to: Position, ratio?: [number, number]) => boolean; next: () => void; previous: () => void; suspended?: boolean
 }) {
@@ -63,7 +64,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
   }, [selectedKey, beat])
   const selectedDraftRest = editDraftRest && mode === 'numbered' && !!beat.draft
   const selectedRest = mode === 'numbered' && !beat.notes.length && (!beat.draft || selectedDraftRest)
-  const { duration, dots, triplet } = selectedRest || batch ? beat : entry
+  const { duration, dots, triplet } = !beat.draft || selectedRest || batch ? beat : entry
   const rhythm = { duration, dots, triplet }
   const hasPitch = batch ? batch.beats.some(({ notes }) => notes.length > 0) : !!current
   function changePitch(amount: number) {
@@ -71,7 +72,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
     if (!current) return
     if (percussion) return
     const notes = beat.notes.map((tone) => {
-      if (tone !== current && !wholeChord) return tone
+      if (tone !== current && (!wholeChord || mode === 'numbered' && position.note !== undefined)) return tone
       return { ...tone, midi: tone.midi + amount, fret: tone.fret === undefined ? undefined : tone.fret + amount }
     })
     if (notes.some(({ midi }) => midi < 0 || midi > 127)) { setError('音高超出可记谱范围。'); return }
@@ -236,7 +237,7 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         })}</div> : <div className="button-grid degrees">{[1, 2, 3, 4, 5, 6, 7].map((value) =>
           <button key={value} aria-label={t('录入简谱 {degree}', { degree: value })} onClick={() => degree(value)}>{value}</button>)}</div>}
       </>}
-      {beat.notes.length > 1 && <label className="checkbox"><input type="checkbox" checked={wholeChord}
+      {beat.notes.length > 1 && (mode !== 'numbered' || position.note === undefined) && <label className="checkbox"><input type="checkbox" checked={wholeChord}
         onChange={(event) => setWholeChord(event.target.checked)} />{t('一起移动和弦音')}</label>}
       {current && <small>{t('所选音：{pitch} · 八度 {octave}', { pitch: pitchNames[current.midi % 12] + (Math.floor(current.midi / 12) - 1), octave: octaveOf(current.midi) })}</small>}
       {!percussion && <div className="inline small-gap">
@@ -250,9 +251,10 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         <button onClick={previous}>{t('上一拍')}</button><button onClick={next}>{t('下一拍')}</button>
       </div>
       <div className="tool-actions tool-actions-danger" role="group" aria-label={t('移除操作')}>
-        {mode === 'numbered' && current && beat.notes.length > 1 &&
+        {!batch && mode === 'numbered' && position.note === undefined && current && beat.notes.length > 1 &&
           <button onClick={() => edit((old) => ({ ...old, notes: old.notes.filter((note) => note !== current) }))}>{t('移除所选音')}</button>}
-        <button disabled={!!beat.draft} onClick={() => edit(() => blank())}>{t('清空')}</button>
+        <button disabled={!!beat.draft && !batch} onClick={deleteNotes}>{t(batch ? '删除选区音符'
+          : mode === 'numbered' && position.note !== undefined && beat.notes.length > 1 ? '移除所选音' : '清空')}</button>
       </div>
       </ToolPanel>
       <ToolPanel label={t('歌词与和弦')}>

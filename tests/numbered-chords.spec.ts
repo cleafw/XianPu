@@ -91,8 +91,8 @@ test('enters a numbered chord without advancing and keeps the chord in print and
   await expect(page.getByText('第 1 小节 · 位置 1', { exact: true })).toBeVisible()
 
   async function verifyStack(scope: string) {
-    const groups = page.locator(scope + ' svg g:has(> text)')
-    const read = () => groups.evaluateAll((items) => items.map((group) => [...group.querySelectorAll(':scope > text')]
+    const groups = page.locator(scope + ' svg g:has(> g[class^="xianpu-stack-note-"])')
+    const read = () => groups.evaluateAll((items) => items.map((group) => [...group.querySelectorAll(':scope > g[class^="xianpu-stack-note-"] > text')]
       .filter((item) => /^[135]$/.test(item.textContent ?? ''))
       .map((item) => {
         const box = item.getBoundingClientRect()
@@ -113,7 +113,30 @@ test('enters a numbered chord without advancing and keeps the chord in print and
   await page.keyboard.press('Shift+ArrowDown')
   await expect(page.getByText('所选音：E4 · 八度 0')).toBeVisible()
   await page.keyboard.press('Shift+ArrowUp')
-  await verifyStack('.canvas')
+  for (const [layer, pitch] of [[0, 'C4'], [1, 'G4'], [2, 'E5']] as const) {
+    const point = (await verifyStack('.canvas'))[layer]
+    await page.mouse.click(point.x, point.y)
+    await expect(page.getByText(new RegExp('所选音：' + pitch))).toBeVisible()
+    const frame = (await page.locator('.score-cursor').boundingBox())!
+    expect(frame.y + frame.height / 2).toBeCloseTo(point.y, 0)
+    await page.keyboard.press('Shift+ArrowUp')
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('xianpu.recovery.v1')!))
+    const expected = [67, 60, 76]
+    expected[[1, 0, 2][layer]] += 12
+    expect(saved.tracks[0].bars[0][0].notes.map(({ midi }) => midi)).toEqual(expected)
+    await page.keyboard.press('Control+z')
+  }
+  const layers = await verifyStack('.canvas')
+  await page.mouse.click(layers[0].x, layers[0].y)
+  await page.keyboard.down('Control')
+  await page.mouse.click(layers[2].x, layers[2].y)
+  await page.keyboard.up('Control')
+  await expect(page.locator('.canvas .score-note-highlight')).toHaveCount(2)
+  await page.getByRole('button', { name: '加减时线', exact: true }).click()
+  const shortened = await page.evaluate(() => JSON.parse(localStorage.getItem('xianpu.recovery.v1')!))
+  expect(shortened.tracks[0].bars[0][0]).toMatchObject({ duration: 8, notes: [{ midi: 67 }, { midi: 60 }, { midi: 76 }] })
+  await page.getByRole('button', { name: '去减时线', exact: true }).click()
+  await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '下一拍' }).click()
   await expect(page.getByText('第 1 小节 · 位置 2', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '导出', exact: true }).click()
@@ -169,6 +192,110 @@ test('aligns the lowest number and duration underlines of stacked and single not
   await check('.canvas .score-render')
   await page.getByRole('button', { name: '导出', exact: true }).click()
   await check('.preview-scroll .print-page')
+})
+
+test('aligns each stack layer across measures with different octave dots and accidentals', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.layout.barsPerLine = 2
+  const track = project.tracks[0]
+  track.bars[0] = [[60, 64], [72, 76], [49, 61, 65], [60]].map((pitches) => ({
+    ...blank(), draft: false, notes: pitches.map((midi) => ({ midi })),
+  }))
+  track.bars[1] = [[60, 64, 77], [48, 52, 56], [60, 76], [67]].map((pitches) => ({
+    ...blank(), draft: false, notes: pitches.map((midi) => ({ midi })),
+  }))
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'layered-stacks.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+
+  async function check(scope: string) {
+    const stacks = page.locator(scope + ' g:has(> g[class^="xianpu-stack-note-"])')
+    await expect(stacks).toHaveCount(6)
+    const layers = await stacks.evaluateAll((nodes) => nodes.map((node) =>
+      [...node.querySelectorAll(':scope > g[class^="xianpu-stack-note-"] > text')].map((digit) => {
+        const { x, y, width, height } = digit.getBoundingClientRect()
+        return { x: x + width / 2, y: y + height / 2 }
+      })))
+    for (const digits of layers) {
+      expect(Math.max(...digits.map(({ x }) => x)) - Math.min(...digits.map(({ x }) => x))).toBeLessThan(1)
+      for (let layer = 1; layer < digits.length; layer++) expect(digits[layer].y).toBeLessThan(digits[layer - 1].y)
+    }
+    for (const layer of [0, 1, 2]) {
+      const heights = layers.flatMap((digits) => digits[layer] ? [digits[layer].y] : [])
+      expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(0.2)
+    }
+  }
+
+  await check('.canvas')
+  await page.getByRole('combobox', { name: '缩放', exact: true }).selectOption('125')
+  await check('.canvas')
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  await check('.preview-scroll .print-page')
+})
+
+test('keeps the layer selection frame on the original note when a long stack has continuation digits', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.tracks[0].bars[0] = [{ ...blank(2), dots: 2, draft: false, notes: [{ midi: 60 }, { midi: 76 }] }]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'long-stack.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const notes = page.locator('.canvas svg text').filter({ hasText: /^3$/ })
+    .and(page.locator('svg text[style*="dominant-baseline: middle"]'))
+  await expect(notes).toHaveCount(2)
+  const first = (await notes.first().boundingBox())!
+  await page.mouse.click(first.x + first.width / 2, first.y + first.height / 2)
+  await expect(page.getByText('所选音：E5 · 八度 1')).toBeVisible()
+  const frame = (await page.locator('.score-cursor').boundingBox())!
+  expect(frame.x + frame.width / 2).toBeCloseTo(first.x + first.width / 2, 0)
+})
+
+test('deletes selected stack layers and keeps the beat rhythm when the whole stack is removed', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.tracks[0].bars[0] = [[60, 64, 67], [62, 65]].map((pitches) => ({
+    ...blank(8), draft: false, notes: pitches.map((midi) => ({ midi })),
+  }))
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'delete-stack.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const stacks = page.locator('.canvas g:has(> g[class^="xianpu-stack-note-"])')
+  const digits = (stack: number) => stacks.nth(stack).locator(':scope > g[class^="xianpu-stack-note-"] > text')
+  async function pick(layer: number, additive = false) {
+    const box = (await digits(0).nth(layer).boundingBox())!
+    if (additive) await page.keyboard.down('Control')
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    if (additive) await page.keyboard.up('Control')
+  }
+  const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('xianpu.recovery.v1')!))
+
+  await expect(digits(0)).toHaveText(['1', '3', '5'])
+  await pick(1)
+  await page.keyboard.press('Delete')
+  await expect(digits(0)).toHaveText(['1', '5'])
+  const moved = (await digits(0).nth(1).boundingBox())!
+  const adjacent = (await digits(1).nth(1).boundingBox())!
+  expect(moved.y).toBeCloseTo(adjacent.y, 0)
+  expect((await saved()).tracks[0].bars[0][0]).toMatchObject({ duration: 8, notes: [{ midi: 60 }, { midi: 67 }] })
+
+  await page.keyboard.press('Control+z')
+  await expect(digits(0)).toHaveText(['1', '3', '5'])
+  await pick(1)
+  await page.getByRole('button', { name: '移除所选音', exact: true }).click()
+  await expect(digits(0)).toHaveText(['1', '5'])
+  await pick(0)
+  await pick(1, true)
+  await expect(page.locator('.canvas .score-note-highlight')).toHaveCount(2)
+  await page.keyboard.press('Delete')
+  await expect(stacks).toHaveCount(1)
+  expect((await saved()).tracks[0].bars[0][0]).toMatchObject({ duration: 8, notes: [], draft: false })
+  expect((await saved()).tracks[0].bars[0][1].notes).toEqual([{ midi: 62 }, { midi: 65 }])
+  await page.keyboard.press('Control+z')
+  await expect(digits(0)).toHaveText(['1', '5'])
 })
 
 test('drags notes, applies batch rhythm and pitch, and copies selected notes in score order', async ({ page }) => {

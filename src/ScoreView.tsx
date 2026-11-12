@@ -39,12 +39,13 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
   const container = useRef<HTMLDivElement>(null)
   const cursor = useRef<HTMLDivElement>(null)
   const highlights = useRef<HTMLDivElement>(null)
+  const stackGlyphs = useRef(new Map<number, SVGTextElement>())
   const apiRef = useRef<AlphaTabApi | null>(null)
   const pendingScroll = useRef<ScoreScroll | null>(null)
   const callbacks = useRef({ onReady, onError, position, playhead, selectedBars, selectedNotes })
   callbacks.current = { onReady, onError, position, playhead, selectedBars, selectedNotes }
 
-  function positionAt(event: { clientX: number; clientY: number }): (Position & { noteHit: boolean }) | undefined {
+  function positionAt(event: { clientX: number; clientY: number }, doc = container.current?.ownerDocument): (Position & { noteHit: boolean }) | undefined {
     const lookup = apiRef.current?.boundsLookup
     const surface = container.current?.querySelector('.at-surface')
     if (!lookup || !surface) return
@@ -55,12 +56,33 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     const master = system?.findBarAtPos(x)
     if (!master) return
 
+    const hit = doc?.elementFromPoint(event.clientX, event.clientY)?.closest('g[class^="xianpu-stack-note-"]')
+    let stackId = hit ? Number(hit.getAttribute('class')!.slice('xianpu-stack-note-'.length)) : undefined
+    if (stackId === undefined && stackGlyphs.current.size) {
+      // Other music glyphs can have tall text boxes even where they paint no ink.
+      // Use the rendered number's box so those glyphs don't intercept a stack layer.
+      let closest = Infinity
+      for (const bar of master.bars) for (const beat of bar.beats) {
+        if (beat.beat.notes.length < 2) continue
+        for (const note of beat.beat.notes) {
+          const box = stackGlyphs.current.get(note.id)?.getBoundingClientRect()
+          if (!box || event.clientX < box.left || event.clientX > box.right ||
+            event.clientY < box.top || event.clientY > box.bottom) continue
+          const distance = Math.abs(event.clientY - box.top - box.height / 2)
+          if (distance < closest) { closest = distance; stackId = note.id }
+        }
+      }
+    }
+    const stackBeat = (bar: StaffBar) => stackId === undefined ? undefined
+      : entryLane(master, bar, 'staff-numbered') === 'staff' ? undefined
+        : bar.beats.find(({ notes }) => notes?.some(({ note }) => note.id === stackId))
     // alphaTab's default hit test chooses a beat horizontally across the whole
     // master bar. Select the individual staff vertically before finding its beat.
     let nearest: StaffBar | undefined
     let bestDistance = Infinity
     let bestCenter = Infinity
     for (const candidate of master.bars) {
+      if (stackBeat(candidate)) { nearest = candidate; break }
       const bounds = candidate.realBounds
       const distance = Math.max(bounds.y - y, y - (bounds.y + bounds.h), 0)
       const center = Math.abs(y - (bounds.y + bounds.h / 2))
@@ -79,10 +101,10 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     const precise = nearest.beats.find((entry) => entry.findNoteAtPos(x, y))
     const preferred = track.id === position?.track ? voices.indexOf(position.voice ?? 0) : -1
     const candidates = preferred < 0 ? [] : nearest.beats.filter((entry) => entry.beat.voice.index === preferred)
-    const target = precise ?? candidates.find((entry) => x >= entry.realBounds.x && x <= entry.realBounds.x + entry.realBounds.w)
+    const target = stackBeat(nearest) ?? precise ?? candidates.find((entry) => x >= entry.realBounds.x && x <= entry.realBounds.x + entry.realBounds.w)
       ?? nearest.findBeatAtPos(x)
     if (!target) return
-    const note = target.beat.graceType ? null : target.findNoteAtPos(x, y)
+    const note = target.beat.graceType ? null : target.notes?.find(({ note }) => note.id === stackId)?.note ?? target.findNoteAtPos(x, y)
     const visual = target.visualBounds
     const noteHit = !!note || (target.beat.isRest || target.beat.notes.length > 0) && Math.abs(target.onNotesX - x) <= 10 * scale &&
       Math.abs(visual.y + visual.h / 2 - y) <= 14 * scale
@@ -126,20 +148,34 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     return { left: x - 8, right: x + 8, top, bottom: top + Math.max(visual.h + 6, 18) }
   }
 
+  function stackFrame(target: Position, bounds: StaffBar['beats'][number]) {
+    if (target.note === undefined || bounds.beat.notes.length < 2) return
+    const note = bounds.beat.notes.find((note) => scoreNoteIndex(note) === target.note)
+    const glyph = note && stackGlyphs.current.get(note.id)
+    const surface = glyph?.closest('.at-surface')
+    if (!glyph || !surface) return
+    const origin = surface.getBoundingClientRect()
+    const box = glyph.getBoundingClientRect()
+    return { left: box.left - origin.left - 2, right: box.right - origin.left + 2,
+      top: box.top - origin.top, bottom: box.bottom - origin.top }
+  }
+
   function noteFrames(api: AlphaTabApi, selection: Position[]) {
     type Frame = ReturnType<typeof cursorBox>
     const groups = new Map<string, { target: Position; frame: Frame; lastBeat: boolean }[]>()
+    const frames: Frame[] = []
     for (const target of selection) {
       const location = locate(target, api)
       if (!location?.bounds || !location.staff) continue
       const { master, staff, lane, bounds, lastBeat } = location
+      const layer = lane !== 'staff' && lane !== 'tab' ? stackFrame(target, bounds) : undefined
+      if (layer) { frames.push(layer); continue }
       const key = JSON.stringify([master.staffSystemBounds?.index, target.track, staff.bar.staff.index, lane, target.voice ?? 0])
       const group = groups.get(key) ?? []
       if (group.some((item) => item.target.bar === target.bar && item.target.beat === target.beat)) continue
       group.push({ target, frame: cursorBox(bounds.visualBounds, bounds.onNotesX), lastBeat })
       groups.set(key, group)
     }
-    const frames: Frame[] = []
     for (const group of groups.values()) {
       group.sort((a, b) => a.target.bar - b.target.bar || a.target.beat - b.target.beat)
       let previous: typeof group[number] | undefined
@@ -186,13 +222,15 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     })
     const noteHighlights = active ? [] : noteFrames(api, callbacks.current.selectedNotes)
     highlights.current?.replaceChildren(...measureHighlights, ...noteHighlights)
-    const { master, staff, bounds } = locate(selected, api) ?? {}
+    const { master, staff, lane, bounds } = locate(selected, api) ?? {}
     const simile = active && master && project.measures[selected.bar]?.simile
     marker.hidden = !bounds && !simile || !active && !!callbacks.current.selectedNotes.length
     if (bounds || simile) {
       const visual = bounds?.visualBounds ?? staff?.visualBounds ?? master!.visualBounds
-      const frame = cursorBox(visual, bounds?.onNotesX ?? visual.x + visual.w / 2)
+      const frame = (!active && bounds && lane !== 'staff' && lane !== 'tab' && stackFrame(selected, bounds)) ||
+        cursorBox(visual, bounds?.onNotesX ?? visual.x + visual.w / 2)
       marker.style.left = frame.left + 'px'
+      marker.style.width = frame.right - frame.left + 'px'
       marker.style.top = frame.top + 'px'
       marker.style.height = frame.bottom - frame.top + 'px'
       if (active) {
@@ -235,6 +273,8 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     try {
       const api = drawScore(element, project, part, scale, language, () => {
         restoreScroll()
+        stackGlyphs.current = new Map([...element.querySelectorAll<SVGTextElement>('g[class^="xianpu-stack-note-"] > text')]
+          .map((glyph) => [Number(glyph.parentElement!.getAttribute('class')!.slice('xianpu-stack-note-'.length)), glyph]))
         if (onLabelSelect) for (const label of element.querySelectorAll('[data-score-label-kind]')) {
           label.setAttribute('role', 'button')
           label.setAttribute('tabindex', '0')
