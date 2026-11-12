@@ -5,15 +5,21 @@ import { ToolPanel } from './ToolPanel'
 import { eventElement, listenWorkspaceKeys } from './panelWindows'
 import type { SpanEnd } from './notationMarks'
 import { blank, durations, measureSettings, midiForDegree, pitchNames, previousBeat, matchingTie, staffAccidental, ticks, tonic, writtenKey, type Beat, type Duration, type Mode, type Position, type Project, type Track } from './model'
+import { steppedRhythm, type RhythmEdit } from './noteSelection'
 
 type Entry = { duration: Duration; dots: Beat['dots']; triplet: boolean; octave: number; accidental?: number; string: number }
 const initial: Entry = { duration: 4, dots: 0, triplet: false, octave: 0, string: 1 }
-const longValues = [{ duration: 4, dots: 0 }, { duration: 2, dots: 0 }, { duration: 2, dots: 1 }, { duration: 1, dots: 0 }] as const
+type BatchEdit = {
+  beats: Beat[]
+  changeRhythm: (update: (beat: Beat) => Partial<Beat> | undefined) => void
+  changePitch: (amount: number) => TextKey | undefined
+}
 
-export function Editor({ score, track, position, mode, beat, edit, putSpan, removeSpan, putTuplet, next, previous, extendBeat, suspended = false, editDraftRest = false }: {
+export function Editor({ score, track, position, mode, beat, edit, putSpan, removeSpan, putTuplet, next, previous, extendBeat, batch, suspended = false, editDraftRest = false }: {
   score: Project; track: Track; position: Position; mode: Mode; beat: Beat;
   editDraftRest?: boolean;
   extendBeat: () => boolean;
+  batch?: BatchEdit;
   edit: (fn: (b: Beat) => Beat) => void; putSpan: (from: Position, to: Position, span: SpanEnd) => boolean; removeSpan: (id: string) => void; putTuplet: (from: Position, to: Position, ratio?: [number, number]) => boolean; next: () => void; previous: () => void; suspended?: boolean
 }) {
   const { language, t } = useLanguage()
@@ -57,9 +63,11 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
   }, [selectedKey, beat])
   const selectedDraftRest = editDraftRest && mode === 'numbered' && !!beat.draft
   const selectedRest = mode === 'numbered' && !beat.notes.length && (!beat.draft || selectedDraftRest)
-  const { duration, dots, triplet } = selectedRest ? beat : entry
+  const { duration, dots, triplet } = selectedRest || batch ? beat : entry
   const rhythm = { duration, dots, triplet }
+  const hasPitch = batch ? batch.beats.some(({ notes }) => notes.length > 0) : !!current
   function changePitch(amount: number) {
+    if (batch) { setError(batch.changePitch(amount) ?? ''); return }
     if (!current) return
     if (percussion) return
     const notes = beat.notes.map((tone) => {
@@ -111,19 +119,26 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
     return base + [0, 2, 4, 5, 7, 9, 11][degreeByLetter] + entry.octave * 12 + (entry.accidental ?? staffAccidental(name, keySignature))
   }
   function setRhythm(value: Partial<Pick<Entry, 'duration' | 'dots' | 'triplet'>>) {
+    if (batch) {
+      batch.changeRhythm((beat) => value.triplet !== undefined && beat.tuplet ? undefined : value)
+      return
+    }
     const updated = { ...rhythm, ...value }
     setEntry((old) => ({ ...old, ...updated }))
     if (!beat.draft || selectedDraftRest) edit((old) => ({ ...old, ...updated, draft: false }))
   }
-  function stepRhythm(amount: number, long = false) {
-    if (long) {
-      const index = longValues.findIndex((value) => value.duration === rhythm.duration && value.dots === rhythm.dots)
-      const nextValue = longValues[index + amount]
-      if (index >= 0 && nextValue) setRhythm(nextValue)
-    } else {
-      const duration = durations[durations.indexOf(rhythm.duration) + amount]
-      if (duration) setRhythm({ duration })
-    }
+  function rhythmStep(value: Beat | typeof rhythm, action: RhythmEdit) {
+    if (batch && (action === 'add-extension' || action === 'remove-extension') &&
+      (value.triplet || ('tuplet' in value && value.tuplet))) return
+    return steppedRhythm(value, action, mode === 'numbered')
+  }
+  function canStep(action: RhythmEdit) {
+    return (batch?.beats ?? [rhythm]).some((value) => !!rhythmStep(value, action))
+  }
+  function stepRhythm(action: RhythmEdit) {
+    if (batch) { batch.changeRhythm((beat) => rhythmStep(beat, action)); return }
+    const updated = rhythmStep(rhythm, action)
+    if (updated) setRhythm(updated)
   }
   useEffect(() => {
     function keyDown(event: KeyboardEvent) {
@@ -136,10 +151,13 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         changePitch(key === 'arrowup' ? 12 : -12)
       } else if (key === '[' || key === ']') {
         event.preventDefault()
-        stepRhythm(key === '[' ? 1 : -1)
+        stepRhythm(key === '[' ? 'shorten' : 'lengthen')
       } else if (key === '-' && mode === 'numbered') {
         event.preventDefault()
-        if (!event.repeat) setError(extendBeat() ? '' : '需要同一小节内相邻的四分音符或四分休止，且延长后的时值可以用增时线表示。')
+        if (!event.repeat) {
+          if (batch) stepRhythm('add-extension')
+          else setError(extendBeat() ? '' : '需要同一小节内相邻的四分音符或四分休止，且延长后的时值可以用增时线表示。')
+        }
       } else if (key === 'arrowright' || key === 'arrowleft') {
         event.preventDefault()
         if (key === 'arrowright') next()
@@ -177,11 +195,11 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
       <button aria-pressed={rhythm.dots === 2} onClick={() => setRhythm({ dots: rhythm.dots === 2 ? 0 : 2 })}>{t('双附点')}</button>
       <button disabled={!!beat.tuplet} aria-pressed={rhythm.triplet} onClick={() => setRhythm({ triplet: !rhythm.triplet })}>{t('三连音')}</button></div>
       <div className="inline small-gap">
-        <button title="[" disabled={rhythm.duration === 64} onClick={() => stepRhythm(1)}>{t(mode === 'numbered' ? '加减时线' : '缩短时值')}</button>
-        <button title="]" disabled={mode === 'numbered' ? rhythm.duration <= 4 : rhythm.duration === 1} onClick={() => stepRhythm(-1)}>{t(mode === 'numbered' ? '去减时线' : '延长时值')}</button>
+        <button title="[" disabled={!canStep('shorten')} onClick={() => stepRhythm('shorten')}>{t(mode === 'numbered' ? '加减时线' : '缩短时值')}</button>
+        <button title="]" disabled={!canStep('lengthen')} onClick={() => stepRhythm('lengthen')}>{t(mode === 'numbered' ? '去减时线' : '延长时值')}</button>
         {mode === 'numbered' && <>
-          <button disabled={!longValues.some((value, i) => i < 3 && value.duration === rhythm.duration && value.dots === rhythm.dots)} onClick={() => stepRhythm(1, true)}>{t('加增时线')}</button>
-          <button disabled={!longValues.some((value, i) => i > 0 && value.duration === rhythm.duration && value.dots === rhythm.dots)} onClick={() => stepRhythm(-1, true)}>{t('去增时线')}</button>
+          <button disabled={!canStep('add-extension')} onClick={() => stepRhythm('add-extension')}>{t('加增时线')}</button>
+          <button disabled={!canStep('remove-extension')} onClick={() => stepRhythm('remove-extension')}>{t('去增时线')}</button>
         </>}
       </div>
       </ToolPanel>
@@ -222,10 +240,10 @@ export function Editor({ score, track, position, mode, beat, edit, putSpan, remo
         onChange={(event) => setWholeChord(event.target.checked)} />{t('一起移动和弦音')}</label>}
       {current && <small>{t('所选音：{pitch} · 八度 {octave}', { pitch: pitchNames[current.midi % 12] + (Math.floor(current.midi / 12) - 1), octave: octaveOf(current.midi) })}</small>}
       {!percussion && <div className="inline small-gap">
-        <button title="Shift+↑" disabled={!current} onClick={() => changePitch(12)}>{t('升八度')}</button>
-        <button title="Shift+↓" disabled={!current} onClick={() => changePitch(-12)}>{t('降八度')}</button>
-        <button disabled={!current} onClick={() => changePitch(1)}>{t('升半音')}</button>
-        <button disabled={!current} onClick={() => changePitch(-1)}>{t('降半音')}</button>
+        <button title="Shift+↑" disabled={!hasPitch} onClick={() => changePitch(12)}>{t('升八度')}</button>
+        <button title="Shift+↓" disabled={!hasPitch} onClick={() => changePitch(-12)}>{t('降八度')}</button>
+        <button disabled={!hasPitch} onClick={() => changePitch(1)}>{t('升半音')}</button>
+        <button disabled={!hasPitch} onClick={() => changePitch(-1)}>{t('降半音')}</button>
       </div>}
       <div className="tool-actions"><button onClick={rest}>{t('休止')}</button></div>
       <div className="tool-actions" role="group" aria-label={t('拍位导航')}>

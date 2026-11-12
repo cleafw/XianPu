@@ -94,6 +94,7 @@ h1, h2 { margin: 0; }
 .canvas [data-score-label-hit] { cursor: pointer; pointer-events: all; }
 .canvas [data-score-label-kind]:is(:hover, :focus-visible) > rect { stroke: var(--green); }
 .score-measure-highlight { position: absolute; pointer-events: none; background: #3b88ff26; border: 1px solid #3b88ff65; }
+.note-selection-help { display: block; }
 .measure-list { user-select: none; }
 .position-panel { margin-top: 13px; }
 .position-panel .tool-panel-body { padding-inline: 12px; }
@@ -231,7 +232,7 @@ body.tool-popup { height: 100vh; overflow: auto; scrollbar-gutter: stable; backg
 
 .score-frame { position: relative; }
 .score-cursor.is-playing { background: #2d7cd75e; outline-color: #235994; }
-.score-cursor { position: absolute; width: 16px; border-radius: 5px; background: #2f9b7660; outline: 1px solid #257963; pointer-events: none; z-index: 2; }
+.score-cursor, .score-note-highlight { position: absolute; width: 16px; border-radius: 5px; background: #2f9b7660; outline: 1px solid #257963; pointer-events: none; z-index: 2; }
 .rhythm { display: grid; grid-template-columns: repeat(3, 1fr); }
 .print-render-source { position: absolute; left: -10000px; top: 0; width: calc(var(--paper-width) - 2 * var(--paper-margin)); }
 .print-page { position: relative; display: flex; flex-direction: column; min-height: var(--paper-height); padding: var(--paper-margin); background: white; margin-bottom: 12px; box-shadow: 0 1px 5px #18332725; }

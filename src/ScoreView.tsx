@@ -9,7 +9,8 @@ type MasterBar = NonNullable<ReturnType<NonNullable<AlphaTabApi['boundsLookup']>
 type StaffBar = MasterBar['bars'][number]
 type ScoreScroll = { part: string | null; top: number; left: number }
 
-function voiceIndices(track: Track, mode: Mode | undefined, staff: number) {
+function voiceIndices(track: Track, mode: Mode | undefined, staff: number, lane?: Position['lane']) {
+  if (mode === 'numbered' || mode === 'staff-numbered' && (staff > 0 || lane === 'numbered')) return [staff]
   const extras = (track.voices ?? []).flatMap((voice, index) => mode !== 'piano' || (voice.staff ?? 0) === staff ? [index + 1] : [])
   return mode !== 'piano' || staff === 0 || !track.voices?.some((voice) => voice.staff === 1) ? [0, ...extras] : extras
 }
@@ -18,8 +19,16 @@ function lanes(master: MasterBar, bar: StaffBar) {
   return master.bars.filter((entry) => entry.bar === bar.bar).sort((a, b) => a.realBounds.y - b.realBounds.y)
 }
 
-export function ScoreView({ project, part, position, playhead, selectedBars = [], scale = 1, print = false, onSelect, onLabelSelect, onBarSelect, onBarRange, onBarMenu, onReady, onError }: {
+function entryLane(master: MasterBar, bar: StaffBar, mode?: Mode): Position['lane'] {
+  if (mode === 'staff-numbered' && bar.bar.staff.index > 0) return 'numbered'
+  const entries = lanes(master, bar)
+  return entries.length > 1 ? entries[0] === bar ? 'staff' : mode === 'staff-numbered' ? 'numbered' : 'tab' : undefined
+}
+
+export function ScoreView({ project, part, position, playhead, selectedBars = [], selectedNotes = [], scale = 1, print = false, onSelect, onNoteSelect, onNoteRange, onLabelSelect, onBarSelect, onBarRange, onBarMenu, onReady, onError }: {
   project: Project; part: string | null; position?: Position; playhead?: Position | null; selectedBars?: number[]; scale?: number; print?: boolean; onSelect?: (position: Position) => void;
+  selectedNotes?: Position[]; onNoteSelect?: (position: Position, event: MouseEvent) => void;
+  onNoteRange?: (start: Position, end: Position) => void;
   onBarSelect?: (position: Position, event: MouseEvent) => void;
   onBarRange?: (start: Position, end: number) => void;
   onBarMenu?: (position: Position, event: MouseEvent) => void;
@@ -32,10 +41,10 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
   const highlights = useRef<HTMLDivElement>(null)
   const apiRef = useRef<AlphaTabApi | null>(null)
   const pendingScroll = useRef<ScoreScroll | null>(null)
-  const callbacks = useRef({ onReady, onError, position, playhead, selectedBars })
-  callbacks.current = { onReady, onError, position, playhead, selectedBars }
+  const callbacks = useRef({ onReady, onError, position, playhead, selectedBars, selectedNotes })
+  callbacks.current = { onReady, onError, position, playhead, selectedBars, selectedNotes }
 
-  function positionAt(event: { clientX: number; clientY: number }): Position | undefined {
+  function positionAt(event: { clientX: number; clientY: number }): (Position & { noteHit: boolean }) | undefined {
     const lookup = apiRef.current?.boundsLookup
     const surface = container.current?.querySelector('.at-surface')
     if (!lookup || !surface) return
@@ -64,10 +73,9 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     if (!nearest) return
     const track = part ? project.tracks.find((item) => item.id === part) : project.tracks[nearest.bar.staff.track.index]
     if (!track) return
-    const sameTrack = lanes(master, nearest)
     const mode = part ? track.layout.mode ?? track.mode : track.mode
-    const lane = sameTrack.length > 1 ? (sameTrack[0] === nearest ? 'staff' : mode === 'staff-numbered' ? 'numbered' : 'tab') : undefined
-    const voices = voiceIndices(track, mode, nearest.bar.staff.index)
+    const lane = entryLane(master, nearest, mode)
+    const voices = voiceIndices(track, mode, nearest.bar.staff.index, lane)
     const precise = nearest.beats.find((entry) => entry.findNoteAtPos(x, y))
     const preferred = track.id === position?.track ? voices.indexOf(position.voice ?? 0) : -1
     const candidates = preferred < 0 ? [] : nearest.beats.filter((entry) => entry.beat.voice.index === preferred)
@@ -75,11 +83,14 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
       ?? nearest.findBeatAtPos(x)
     if (!target) return
     const note = target.beat.graceType ? null : target.findNoteAtPos(x, y)
+    const visual = target.visualBounds
+    const noteHit = !!note || (target.beat.isRest || target.beat.notes.length > 0) && Math.abs(target.onNotesX - x) <= 10 * scale &&
+      Math.abs(visual.y + visual.h / 2 - y) <= 14 * scale
     return { track: track.id, bar: nearest.bar.index, beat: scoreBeatIndex(target.beat), lane, voice: voices[target.beat.voice.index] ?? 0,
-      note: note ? scoreNoteIndex(note) : undefined, string: note?.string ? 7 - note.string : undefined }
+      note: note ? scoreNoteIndex(note) : undefined, string: note?.string ? 7 - note.string : undefined, noteHit }
   }
 
-  const drag = useMeasureDrag(positionAt, onBarRange)
+  const drag = useMeasureDrag(positionAt, onBarRange, onNoteRange)
   function selectLabel(target: EventTarget | null) {
     if (!onLabelSelect || !(target instanceof Element)) return false
     const label = target.closest('[data-score-label-kind]')
@@ -89,6 +100,74 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     return true
   }
 
+  function locate(target: Position, api: AlphaTabApi) {
+    const master = api.boundsLookup?.findMasterBarByIndex(target.bar)
+    const track = project.tracks.find(({ id }) => id === target.track)
+    if (!master || !track || part && part !== track.id) return
+    const index = part ? 0 : project.tracks.indexOf(track)
+    const mode = part ? track.layout.mode ?? track.mode : track.mode
+    const eligible = master.bars.filter((entry) => {
+      if (entry.bar.staff.track.index !== index) return false
+      const lane = entryLane(master, entry, mode)
+      return (!target.lane || !lane || target.lane === lane) &&
+        voiceIndices(track, mode, entry.bar.staff.index, lane).includes(target.voice ?? 0)
+    }).sort((a, b) => a.realBounds.y - b.realBounds.y)
+    const staff = mode === 'piano' ? eligible[0] : eligible.at(-1)
+    if (!staff) return { master }
+    const lane = entryLane(master, staff, mode)
+    const voice = voiceIndices(track, mode, staff.bar.staff.index, lane).indexOf(target.voice ?? 0)
+    const beats = staff.beats.filter(({ beat }) => !beat.graceType && beat.voice.index === voice)
+    const bounds = beats.find(({ beat }) => scoreBeatIndex(beat) === target.beat)
+    return { master, staff, lane, bounds, lastBeat: bounds === beats.at(-1) }
+  }
+
+  function cursorBox(visual: StaffBar['visualBounds'], x: number) {
+    const top = visual.y - 3
+    return { left: x - 8, right: x + 8, top, bottom: top + Math.max(visual.h + 6, 18) }
+  }
+
+  function noteFrames(api: AlphaTabApi, selection: Position[]) {
+    type Frame = ReturnType<typeof cursorBox>
+    const groups = new Map<string, { target: Position; frame: Frame; lastBeat: boolean }[]>()
+    for (const target of selection) {
+      const location = locate(target, api)
+      if (!location?.bounds || !location.staff) continue
+      const { master, staff, lane, bounds, lastBeat } = location
+      const key = JSON.stringify([master.staffSystemBounds?.index, target.track, staff.bar.staff.index, lane, target.voice ?? 0])
+      const group = groups.get(key) ?? []
+      if (group.some((item) => item.target.bar === target.bar && item.target.beat === target.beat)) continue
+      group.push({ target, frame: cursorBox(bounds.visualBounds, bounds.onNotesX), lastBeat })
+      groups.set(key, group)
+    }
+    const frames: Frame[] = []
+    for (const group of groups.values()) {
+      group.sort((a, b) => a.target.bar - b.target.bar || a.target.beat - b.target.beat)
+      let previous: typeof group[number] | undefined
+      let current: Frame | undefined
+      for (const item of group) {
+        const adjacent = previous && (item.target.bar === previous.target.bar && item.target.beat === previous.target.beat + 1 ||
+          item.target.bar === previous.target.bar + 1 && item.target.beat === 0 && previous.lastBeat)
+        const { frame } = item
+        if (current && adjacent) {
+          current.left = Math.min(current.left, frame.left)
+          current.right = Math.max(current.right, frame.right)
+          current.top = Math.min(current.top, frame.top)
+          current.bottom = Math.max(current.bottom, frame.bottom)
+        } else {
+          current = { ...frame }
+          frames.push(current)
+        }
+        previous = item
+      }
+    }
+    return frames.map(({ left, right, top, bottom }) => {
+      const item = document.createElement('div')
+      item.className = 'score-note-highlight'
+      Object.assign(item.style, { left: left + 'px', top: top + 'px', width: right - left + 'px', height: bottom - top + 'px' })
+      return item
+    })
+  }
+
   function markPosition() {
     const marker = cursor.current
     const api = apiRef.current
@@ -96,7 +175,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     const selected = active ?? callbacks.current.position
     if (!marker || !api || !selected) return
     const index = part ? 0 : project.tracks.findIndex((track) => track.id === selected.track)
-    highlights.current?.replaceChildren(...(active ? [] : callbacks.current.selectedBars).flatMap((bar) => {
+    const measureHighlights = (active ? [] : callbacks.current.selectedBars).flatMap((bar) => {
       const bounds = api.boundsLookup?.findMasterBarByIndex(bar)?.bars.filter((entry) => entry.bar.staff.track.index === index) ?? []
       return bounds.map(({ realBounds: area }) => {
         const item = document.createElement('div')
@@ -104,23 +183,18 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
         Object.assign(item.style, { left: area.x + 'px', top: area.y + 'px', width: area.w + 'px', height: area.h + 'px' })
         return item
       })
-    }))
-    const master = api.boundsLookup?.findMasterBarByIndex(selected.bar)
-    const trackBars = master?.bars.filter((bar) => bar.bar.staff.track.index === index)
-      .sort((a, b) => a.realBounds.y - b.realBounds.y)
-    const track = project.tracks.find((item) => item.id === selected.track)
-    const mode = part ? track?.layout.mode ?? track?.mode : track?.mode
-    const staff = track && mode === 'piano' ? trackBars?.find((entry) => voiceIndices(track, mode, entry.bar.staff.index).includes(selected.voice ?? 0))
-      : selected.lane === 'staff' ? trackBars?.[0] : trackBars?.at(-1)
-    const voice = staff && track ? voiceIndices(track, mode, staff.bar.staff.index).indexOf(selected.voice ?? 0) : 0
-    const bounds = staff?.beats.find(({ beat }) => scoreBeatIndex(beat) === selected.beat && !beat.graceType && beat.voice.index === voice)
+    })
+    const noteHighlights = active ? [] : noteFrames(api, callbacks.current.selectedNotes)
+    highlights.current?.replaceChildren(...measureHighlights, ...noteHighlights)
+    const { master, staff, bounds } = locate(selected, api) ?? {}
     const simile = active && master && project.measures[selected.bar]?.simile
-    marker.hidden = !bounds && !simile
+    marker.hidden = !bounds && !simile || !active && !!callbacks.current.selectedNotes.length
     if (bounds || simile) {
       const visual = bounds?.visualBounds ?? staff?.visualBounds ?? master!.visualBounds
-      marker.style.left = ((bounds?.onNotesX ?? visual.x + visual.w / 2) - 8) + 'px'
-      marker.style.top = (visual.y - 3) + 'px'
-      marker.style.height = Math.max(visual.h + 6, 18) + 'px'
+      const frame = cursorBox(visual, bounds?.onNotesX ?? visual.x + visual.w / 2)
+      marker.style.left = frame.left + 'px'
+      marker.style.top = frame.top + 'px'
+      marker.style.height = frame.bottom - frame.top + 'px'
       if (active) {
         const viewport = marker.closest('.canvas')
         const paper = marker.closest('.paper-scroll')
@@ -185,7 +259,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
       reportError(error instanceof Error ? error : new Error(String(error)))
     }
   }, [project, part, scale, language, print])
-  useEffect(markPosition, [position, playhead, selectedBars])
+  useEffect(markPosition, [position, playhead, selectedBars, selectedNotes])
   return <div className="score-frame">
     <div ref={container} className="score-render" data-testid="score-render"
       {...drag.handlers} aria-label={t('可点击的乐谱')} onPointerDown={onSelect ? (event) => {
@@ -195,10 +269,14 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
         if (!target) return
         const clicked = event.target instanceof Element ? event.target.closest('text') : null
         const isBarNumber = clicked?.textContent === String(target.bar + 1) && /c80000|200,\s*0,\s*0/i.test(clicked.getAttribute('fill') ?? '')
-        if (onBarSelect && (event.shiftKey || event.ctrlKey || event.metaKey || isBarNumber)) {
+        const modifier = event.shiftKey || event.ctrlKey || event.metaKey
+        const note = target.noteHit && !isBarNumber
+        if (modifier && note && onNoteSelect) {
+          onNoteSelect(target, event)
+        } else if (onBarSelect && (modifier || isBarNumber)) {
           onBarSelect(target, event)
         } else onSelect(target)
-        if (!event.shiftKey && !event.ctrlKey && !event.metaKey && onBarRange) drag.start(event, target)
+        if (!modifier && (onBarRange || onNoteRange)) drag.start(event, target, note && !!onNoteRange)
       } : undefined} onKeyDown={onLabelSelect ? (event) => {
         if ((event.key === 'Enter' || event.key === ' ') && selectLabel(event.target)) event.preventDefault()
       } : undefined} onContextMenu={onBarMenu ? (event) => {

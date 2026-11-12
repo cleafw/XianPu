@@ -6,9 +6,10 @@ export type KeyChangeError = 'pitch-range' | 'guitar-range'
 const pitchInRange = (midi: number) => midi >= 0 && midi <= 127
 const fretInRange = (fret: number) => fret >= 0 && fret <= 36
 
-function guitarFingering(notes: Tone[], tuning: number[]) {
-  const fretted = notes.flatMap((note, index) => note.string === undefined ? [] : [{ note, index }])
-  if (fretted.every(({ note }) => fretInRange(note.midi - tuning[note.string! - 1]))) {
+export function guitarFingering(notes: Tone[], tuning: number[], assignUnfretted = false) {
+  const fretted = notes.flatMap((note, index) => note.string === undefined && !assignUnfretted ? [] : [{ note, index }])
+  if (fretted.every(({ note }) => fretInRange(note.midi - tuning[note.string! - 1])) &&
+    (!assignUnfretted || new Set(fretted.map(({ note }) => note.string)).size === fretted.length)) {
     return notes.map((note) => note.string === undefined ? note : { ...note, fret: note.midi - tuning[note.string - 1] })
   }
   if (fretted.length > tuning.length) return undefined

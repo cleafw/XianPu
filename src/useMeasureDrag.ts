@@ -3,11 +3,12 @@ import type { Position } from './model'
 
 type Point = { clientX: number; clientY: number }
 
-export function useMeasureDrag(hit: (point: Point, doc: Document) => Position | undefined, select?: (start: Position, end: number) => void) {
-  const drag = useRef<{ id: number; start: Position; end: number; point: Point; scroll: HTMLElement | null; document: Document } | null>(null)
+export function useMeasureDrag(hit: (point: Point, doc: Document) => Position | undefined, select?: (start: Position, end: number) => void,
+  selectNotes?: (start: Position, end: Position) => void) {
+  const drag = useRef<{ id: number; start: Position; end: Position; notes: boolean; point: Point; scroll: HTMLElement | null; document: Document } | null>(null)
   const frame = useRef<number | null>(null)
-  const callbacks = useRef({ hit, select })
-  callbacks.current = { hit, select }
+  const callbacks = useRef({ hit, select, selectNotes })
+  callbacks.current = { hit, select, selectNotes }
   function cancelFrame() {
     if (frame.current !== null) cancelAnimationFrame(frame.current)
     frame.current = null
@@ -17,9 +18,16 @@ export function useMeasureDrag(hit: (point: Point, doc: Document) => Position | 
     const active = drag.current
     if (!active) return
     const next = callbacks.current.hit(point, active.document)
-    if (!next || next.bar === active.end) return
-    active.end = next.bar
-    callbacks.current.select?.(active.start, active.end)
+    if (!next) return
+    if (active.notes) {
+      if (next.track !== active.start.track || (next.voice ?? 0) !== (active.start.voice ?? 0) ||
+        next.bar === active.end.bar && next.beat === active.end.beat) return
+      active.end = next
+      callbacks.current.selectNotes?.(active.start, next)
+    } else if (next.bar !== active.end.bar) {
+      active.end = next
+      callbacks.current.select?.(active.start, next.bar)
+    }
   }
   function scrollFrame() {
     frame.current = null
@@ -44,9 +52,9 @@ export function useMeasureDrag(hit: (point: Point, doc: Document) => Position | 
     cancelFrame()
   }
   return {
-    start(event: PointerEvent<HTMLElement>, start: Position) {
+    start(event: PointerEvent<HTMLElement>, start: Position, notes = false) {
       if (event.pointerType === 'touch') return
-      drag.current = { id: event.pointerId, start, end: start.bar, point: event, scroll: event.currentTarget.closest('.tool-popup, .canvas'), document: event.currentTarget.ownerDocument }
+      drag.current = { id: event.pointerId, start, end: start, notes, point: event, scroll: event.currentTarget.closest('.tool-popup, .canvas'), document: event.currentTarget.ownerDocument }
       event.currentTarget.setPointerCapture(event.pointerId)
     },
     handlers: {

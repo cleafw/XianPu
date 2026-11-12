@@ -4,6 +4,7 @@ use std::{io::{Read, Write}, path::{Path, PathBuf}};
 use tauri::{Emitter, Manager, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, webview::NewWindowResponse};
 
 const MIN_TOOL_PANEL_HEIGHT: f64 = 90.0;
+const MAX_PROJECT_BYTES: usize = 16 * 1024 * 1024;
 
 fn io_error(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -36,10 +37,16 @@ fn fit_tool_panel(window: WebviewWindow, label: String, height: u32, title: Stri
 
 #[tauri::command]
 fn read_project(path: PathBuf) -> Result<String, String> {
-    if std::fs::metadata(&path).map_err(io_error)?.len() > 16 * 1024 * 1024 {
-        return Err("项目文件超过 16 MB".into());
+    let file = std::fs::File::open(path).map_err(io_error)?;
+    if file.metadata().map_err(io_error)?.len() > MAX_PROJECT_BYTES as u64 {
+        return Err("项目文件超过 16 MB。".into());
     }
-    std::fs::read_to_string(path).map_err(io_error)
+    let mut data = Vec::new();
+    file.take(MAX_PROJECT_BYTES as u64 + 1).read_to_end(&mut data).map_err(io_error)?;
+    if data.len() > MAX_PROJECT_BYTES {
+        return Err("项目文件超过 16 MB。".into());
+    }
+    String::from_utf8(data).map_err(io_error)
 }
 
 #[tauri::command]
@@ -61,6 +68,9 @@ async fn read_midi(path: PathBuf) -> Result<tauri::ipc::Response, String> {
 
 #[tauri::command]
 fn write_project(path: PathBuf, data: String) -> Result<(), String> {
+    if data.len() > MAX_PROJECT_BYTES {
+        return Err("项目文件超过 16 MB。".into());
+    }
     write_bytes(path, data.as_bytes(), true)
 }
 

@@ -25,6 +25,7 @@ import { copyMeasures, pasteMeasures, type MeasureClipboard, type PasteMode } fr
 import * as storage from './storage'
 import { importMidi, maxMidiBytes } from './midiImport'
 import { changeKeySignature, type KeyChangeError, type KeyChangeMode } from './keyChange'
+import { clearSelectedNotes, copySelectedNotes, editRhythmSelection, pasteSelectedNotes, sameBeat, sameVoice, selectedBeats, shiftSelectedPitches, type NoteClipboard } from './noteSelection'
 import './styles.css'
 
 type History = { past: Project[]; value: Project | null; future: Project[] }
@@ -112,6 +113,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [part, setPart] = useState<string | null>(null)
   const [selection, setSelection] = useState<Position & { editDraftRest?: boolean }>({ track: '', bar: 0, beat: 0 })
   const [selectedBars, setSelectedBars] = useState<number[]>([])
+  const [selectedNotes, setSelectedNotes] = useState<Position[]>([])
+  const [noteClipboard, setNoteClipboard] = useState<NoteClipboard | null>(null)
+  const noteAnchor = useRef<Position | null>(null)
   const rangeAnchor = useRef<number | null>(null)
   const [barMenu, setBarMenu] = useState<{ x: number; y: number; position: Position; document: Document } | null>(null)
   const [pasteStructure, setPasteStructure] = useState(false)
@@ -140,6 +144,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const workspace = useRef<HTMLElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const openRequest = useRef(0)
+  const saving = useRef(false)
   const projectSession = useRef(0)
   const copied = useRef<MeasureClipboard | null>(null)
   const afterRender = useRef<{ resolve: (pages: HTMLElement[]) => void; reject: (reason: Error) => void } | null>(null)
@@ -170,6 +175,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   activeRef.current = { project, dirty, path, saved, busy }
   const commit = (edit: (score: Project) => Project) => dispatch({ type: 'edit', edit })
   const measureSelection = selectedBars.filter((index) => index < (project?.measures.length ?? 0))
+  const noteTargets = project ? selectedBeats(project, selectedNotes) : []
   const measureDrag = useMeasureDrag(({ clientX, clientY }, doc) => measureButton(doc.elementFromPoint(clientX, clientY)), selectMeasureRange)
 
   function measureButton(element: Element | null) {
@@ -201,6 +207,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setSaved(clean ? score : null)
     setSelection({ track: score?.tracks[0].id ?? '', bar: 0, beat: 0 })
     setSelectedBars([])
+    clearNoteSelection()
     rangeAnchor.current = null
     if (copied.current?.all) copied.current = null
     setBarMenu(null)
@@ -210,9 +217,15 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   async function persist(saveAs = false) {
     const current = activeRef.current
     const session = projectSession.current
-    if (!current.project) return false
+    if (!current.project || saving.current) return false
+    saving.current = true
     try {
-      const data = JSON.stringify(current.project, null, 2)
+      let data = JSON.stringify(current.project, null, 2)
+      if (new Blob([data]).size > storage.maxProjectBytes) data = JSON.stringify(current.project)
+      if (new Blob([data]).size > storage.maxProjectBytes) {
+        setError(message('项目文件超过 16 MB。'))
+        return false
+      }
       let target = current.path
       if (storage.desktop) {
         target = !saveAs && current.path ? current.path : await storage.savePath(current.project.title, t)
@@ -231,6 +244,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     } catch (cause) {
       if (projectSession.current === session) setError(message('保存失败。', undefined, cause))
       return false
+    } finally {
+      saving.current = false
     }
   }
   function setConfirmation(action: (() => void) | null) {
@@ -302,7 +317,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       return
     }
     try {
-      if (file.size > 16 * 1024 * 1024) throw new Error('项目文件超过 16 MB。')
+      if (file.size > storage.maxProjectBytes) throw new Error('项目文件超过 16 MB。')
       const score = parseProject(await file.text())
       if (openRequest.current === request) whenClean(() => load(score, null, true))
     } catch (cause) {
@@ -335,13 +350,18 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       if (event.key === 'Escape' && !panel && !confirm && !pasteWarning && !barMenu) {
         setSelectedBars([])
         rangeAnchor.current = null
+        clearNoteSelection()
       }
       const target = eventElement(event.target)
       const textInput = target?.matches('input, textarea, select') || target?.isContentEditable
       if (event.key === 'Delete' && project && track && !panel && !confirm && !pasteWarning && !barMenu &&
         !busy && !textInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
         event.preventDefault()
-        if (measureSelection.length > 1) {
+        if (noteTargets.length) {
+          if (event.repeat) return
+          const cleared = clearSelectedNotes(project, noteTargets)
+          if (cleared !== project) commit(() => cleared)
+        } else if (measureSelection.length > 1) {
           if (event.repeat) return
           const cleared = clearMeasureContents(project, position, measureSelection)
           if (cleared !== project) commit(() => cleared)
@@ -363,7 +383,10 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       if (!project || panel || confirm || pasteWarning || busy || textInput || event.altKey || event.shiftKey) return
       if (key === 'c' || key === 'v') {
         event.preventDefault()
-        if (key === 'c') copySelection()
+        if (key === 'c') {
+          if (noteTargets.length) copyNotes()
+          else copySelection()
+        } else if (noteClipboard && !measureSelection.length) pasteNotes()
         else pasteSelection(measureSelection.length > 1 ? 'selection' : 'overwrite', measureSelection[0] ?? barIndex)
       }
     }
@@ -373,6 +396,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   function move(step: 1 | -1) {
     if (!project || !track) return
     setSelectedBars([])
+    clearNoteSelection()
     rangeAnchor.current = null
     // Wait for the current edit to update the available beat positions.
     setSelection((current) => {
@@ -394,6 +418,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   function selectView(id: string | null) {
     setPart(id)
     setSelectedBars([])
+    clearNoteSelection()
     rangeAnchor.current = null
     setBarMenu(null)
     if (id) setSelection({ track: id, bar: barIndex, beat: 0, voice: id === position.track ? activeVoice : 0 })
@@ -415,11 +440,53 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }
   function selectBeat(target: Position, editDraftRest = false) {
     setSelectedBars([])
+    clearNoteSelection()
     rangeAnchor.current = null
     setBarMenu(null)
     setSelection({ ...target, editDraftRest })
   }
+  function clearNoteSelection() {
+    setSelectedNotes([])
+    noteAnchor.current = null
+  }
+  function selectNoteRange(from: Position, to: Position) {
+    const item = project?.tracks.find(({ id }) => id === from.track)
+    if (!project || !item || !sameVoice(from, to)) return
+    setSelectedBars([])
+    rangeAnchor.current = null
+    setBarMenu(null)
+    noteAnchor.current = from
+    setSelectedNotes(beatRange(project, item, from, to).flatMap(({ position, beat }) =>
+      !project.measures[position.bar].simile && (!beat.draft || sameBeat(position, from) || sameBeat(position, to))
+        ? [{ ...position, lane: from.lane }] : []))
+    setSelection({ ...to, editDraftRest: true })
+  }
+  function selectNote(target: Position, event: MouseEvent) {
+    if (!project || project.measures[target.bar].simile) return
+    const anchor = noteAnchor.current ?? position
+    if (event.shiftKey) {
+      selectNoteRange(sameVoice(anchor, target) ? anchor : target, target)
+      return
+    }
+    const distinct = !sameBeat(position, target) || position.note !== undefined && target.note !== undefined && position.note !== target.note
+    const initial = selectedNotes.length ? selectedNotes : !measureSelection.length && distinct &&
+      (!beat.draft || selection.editDraftRest) ? [position] : []
+    const whole = initial.find((item) => sameBeat(item, target) && item.note === undefined)
+    const matching = initial.some((item) => sameBeat(item, target) && (item.note === target.note || target.note === undefined))
+    let next = initial.filter((item) => !sameBeat(item, target) || item.note !== undefined && target.note !== undefined && item.note !== target.note)
+    if (whole && target.note !== undefined) {
+      const entry = selectedBeats(project, [whole])[0]
+      next = next.concat(entry?.beat.notes.flatMap((_, note) => note !== target.note ? [{ ...whole, note }] : []) ?? [])
+    } else if (!matching) next.push(target)
+    setSelectedBars([])
+    rangeAnchor.current = null
+    setBarMenu(null)
+    setSelectedNotes(next)
+    noteAnchor.current = target
+    setSelection({ ...(next.at(-1) ?? target), editDraftRest: true })
+  }
   function selectMeasure(target: Position, event: MouseEvent) {
+    clearNoteSelection()
     const anchor = rangeAnchor.current ?? barIndex
     const previous = target.track === position.track && (target.voice ?? 0) === activeVoice ? measureSelection : []
     let next = [target.bar]
@@ -437,6 +504,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setSelection({ ...target, beat: 0, note: undefined, string: undefined })
   }
   function selectMeasureRange(start: Position, end: number) {
+    clearNoteSelection()
     const first = Math.min(start.bar, end)
     setSelectedBars(Array.from({ length: Math.abs(start.bar - end) + 1 }, (_, index) => first + index))
     setSelection({ ...start, beat: 0, note: undefined, string: undefined })
@@ -492,9 +560,66 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     if (!project || !track) return
     const indices = measureSelection.length ? measureSelection : [barIndex]
     copied.current = copyMeasures(project, indices, track.id, all, activeVoice)
+    setNoteClipboard(null)
     setError(null)
     setNotice(message(copied.current.omittedLink ? '已复制 {count} 小节，跨选区连线已略过。' : '已复制 {count} 小节。', { count: indices.length }))
     setBarMenu(null)
+  }
+  function copyNotes() {
+    if (!project || !track || !noteTargets.length) return
+    const source = project.tracks.find(({ id }) => id === noteTargets[0].position.track)!
+    if (noteTargets.some(({ position }) => !sameVoice(position, noteTargets[0].position))) {
+      setError(message('请在同一分谱的同一声部选择要复制的音符。'))
+      return
+    }
+    const clipboard = copySelectedNotes(noteTargets, source)
+    setNoteClipboard(clipboard)
+    setError(null)
+    setNotice(message('已复制 {count} 个音符位置。', { count: clipboard.beats.length }))
+  }
+  function pasteNotes() {
+    if (!project || !noteClipboard) return
+    const result = pasteSelectedNotes(project, position, noteClipboard)
+    if ('error' in result) {
+      setError(message(result.error === 'guitar' ? '当前定弦无法弹出这个音。' : '目标位置后的可用拍位不足，无法粘贴。'))
+      return
+    }
+    commit(() => result.score)
+    setSelectedBars([])
+    rangeAnchor.current = null
+    setSelectedNotes(result.positions)
+    noteAnchor.current = result.positions[0]
+    setError(null)
+    reportNoteOverflow(result.score, result.positions, message('已粘贴 {count} 个音符位置。', { count: result.positions.length }))
+  }
+  function reportNoteOverflow(updated: Project, positions: Position[], fallback: Message | null = null) {
+    if (!project) return
+    const checked = new Set<string>()
+    const overfull = new Set<number>()
+    for (const { track: id, voice = 0, bar } of positions) {
+      const key = JSON.stringify([id, voice, bar])
+      if (checked.has(key)) continue
+      checked.add(key)
+      const before = project.tracks.find(({ id: item }) => item === id)!
+      const after = updated.tracks.find(({ id: item }) => item === id)!
+      const difference = measureDifference(updated, after, bar, voice)
+      if (difference < 0 && difference < measureDifference(project, before, bar, voice) - 1e-7) overfull.add(bar + 1)
+    }
+    setNotice(overfull.size ? message('以下小节超出拍数：{bars}', { bars: [...overfull].sort((a, b) => a - b).join(', ') }) : fallback)
+  }
+  function changeSelectedRhythm(update: (beat: Beat) => Partial<Beat> | undefined) {
+    if (!project) return
+    const score = editRhythmSelection(project, noteTargets, update)
+    if (score !== project) {
+      commit(() => score)
+      reportNoteOverflow(score, noteTargets.map(({ position }) => position))
+    }
+  }
+  function changeSelectedPitch(amount: number) {
+    if (!project) return
+    const result = shiftSelectedPitches(project, noteTargets, amount, activePart)
+    if ('error' in result) return result.error === 'pitch' ? '音高超出可记谱范围。' : '当前定弦无法弹出这个音。'
+    if (result.score !== project) commit(() => result.score)
   }
   function pasteSelection(mode: PasteMode, anchor = barIndex, includeStructure = false) {
     if (!project || !track) return
@@ -522,6 +647,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       setAudioState('idle')
       commit(() => result.score)
       setSelectedBars(result.targets)
+      clearNoteSelection()
       rangeAnchor.current = result.targets[0]
       setSelection({ ...position, bar: result.targets[0], beat: 0 })
       setError(null)
@@ -722,7 +848,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     if (problem) { setError(message('无法试听。', undefined, navigationMessage(t, language, problem))); return }
     try {
       setAudioState('loading')
-      await playScore(project, activePart, () => { setAudioState('idle'); setPlayhead(null) }, () => setAudioState('playing'), position, setPlayhead)
+      const start = noteTargets[0]?.position ?? position
+      await playScore(project, activePart, () => { setAudioState('idle'); setPlayhead(null) }, () => setAudioState('playing'), start, setPlayhead)
     }
     catch (cause) { setAudioState('idle'); setPlayhead(null); setError(message('无法试听。', undefined, cause)) }
   }
@@ -797,6 +924,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
               const added = createTrack(project, kind, name)
               commit((score) => ({ ...score, tracks: [...score.tracks, added] }))
               setSelection({ track: added.id, bar: barIndex, beat: 0 })
+              clearNoteSelection()
               setPart(added.id)
               event.currentTarget.closest('details')?.removeAttribute('open')
             }}>{t(kinds[kind])}</button>)}</div></details>
@@ -823,7 +951,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                 {Array.from({ length: 6 }, (_, i) => <option key={i + 1}>{i + 1}</option>)}</select></label>
               <label>{t('缩放')}<select value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>{[75, 90, 100, 125, 150].map((n) => <option key={n} value={n}>{n}%</option>)}</select></label></div></div>
           <div className="paper-scroll"><div className="paper" style={{ width: page.width * zoom / 100 + 'mm', paddingInline: paperMargin * zoom / 100 + 'mm' }}>
-            <ScoreView key={projectSession.current} project={project} part={activePart} position={position} playhead={audioState === 'playing' ? playhead : null} selectedBars={measureSelection} scale={zoom / 100} onSelect={(target) => selectBeat(target, true)}
+            <ScoreView key={projectSession.current} project={project} part={activePart} position={position} playhead={audioState === 'playing' ? playhead : null} selectedBars={measureSelection} selectedNotes={selectedNotes} scale={zoom / 100} onSelect={(target) => selectBeat(target, true)}
+              onNoteSelect={selectNote} onNoteRange={selectNoteRange}
               onLabelSelect={openScoreLabel} onBarSelect={selectMeasure} onBarRange={selectMeasureRange} onBarMenu={showBarMenu} onError={(cause) => setError(message('谱面绘制失败。', undefined, cause))} />
           </div></div>
           <section className="position-panel" aria-label={t('小节与录入位置')}>
@@ -831,6 +960,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
               <ToolPanel label={t('录入位置')} placement="bottom" initialOpen onDock={() => setBarMenu(null)}>
                 <div className="position-header">
                   <div><small>{t('可直接点谱面，也可在这里选择。')}</small>
+                    <small className="note-selection-help">{t('拖动或 Shift 连选音符，Ctrl 点选单个音符。')}</small>
                     {!!track?.voices?.length && <label>{t('编辑声部')}<select value={activeVoice} onChange={(event) =>
                       selectBeat({ ...position, voice: Number(event.target.value), beat: 0 })}>
                       <option value={0}>{t('主声部')}</option>
@@ -871,6 +1001,13 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                   })}
                 </div>
                 {measureSelection.length > 0 && <small>{t('{track} · 所选小节 {bars}', { track: track!.name, bars: measureSelection.map((index) => index + 1).join(', ') })}</small>}
+                {(noteTargets.length > 0 || noteClipboard) && <div className="tool-actions" role="group" aria-label={t('音符编辑')}>
+                  {noteTargets.length > 0 && <>
+                    <small>{t('已选 {count} 个音符位置', { count: noteTargets.length })}</small>
+                    <button title="Ctrl+C" onClick={copyNotes}>{t('复制所选音符')}</button>
+                  </>}
+                  {noteClipboard && <button title="Ctrl+V" onClick={pasteNotes}>{t('粘贴音符')}</button>}
+                </div>}
                 {track && measureDifference(project, track, barIndex, activeVoice) !== 0 && <p className={'measure-status ' + (measureDifference(project, track, barIndex, activeVoice) < 0 ? 'over' : 'under')}>
                   {t('{track}第 {bar} 小节{status}', { track: track.name, bar: barIndex + 1,
                     status: t(measureDifference(project, track, barIndex, activeVoice) > 0 ? '还差 {beats} 拍' : '超出 {beats} 拍',
@@ -878,8 +1015,14 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                 </p>}
                 {visible.map((item) => <div className="beat-row" key={item.id}><strong>{item.name}</strong><div>
                   {beatList(project, voiceBars(item, item.id === position.track ? activeVoice : 0)[barIndex], barIndex).map((value, index) => <button key={index}
-                    aria-label={t('{track}位置 {beat}', { track: item.name, beat: index + 1 })} aria-pressed={item.id === position.track && index === position.beat}
-                    onClick={() => selectBeat({ track: item.id, bar: barIndex, beat: index, voice: item.id === position.track ? activeVoice : 0 }, !value.notes.length)}>
+                    aria-label={t('{track}位置 {beat}', { track: item.name, beat: index + 1 })}
+                    aria-pressed={selectedNotes.length ? selectedNotes.some((note) => sameBeat(note, { track: item.id, bar: barIndex, beat: index, voice: item.id === position.track ? activeVoice : 0 }))
+                      : item.id === position.track && index === position.beat}
+                    onClick={(event) => {
+                      const target = { track: item.id, bar: barIndex, beat: index, voice: item.id === position.track ? activeVoice : 0 }
+                      if (event.shiftKey || event.ctrlKey || event.metaKey) selectNote(target, event)
+                      else selectBeat(target, !value.notes.length)
+                    }}>
                     <small>{index + 1}</small><span>{value.draft ? '·' : value.notes.length ? value.notes.map((note) => note.string ? note.fret : pitchNames[note.midi % 12]).join('·') : t('休')}</span>
                   </button>)}
                 </div></div>)}
@@ -894,7 +1037,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         </section>
         <PanelsSuspended.Provider value={!!(panel || scoreLabel || confirm || pasteWarning || busy)}>
         {track && <Editor suspended={!!(panel || scoreLabel || confirm || pasteWarning || barMenu)} score={project} track={track} position={position} mode={entryMode} beat={beat} editDraftRest={!!selection.editDraftRest}
-          edit={(edit) => commit((score) => changeBeat(score, position, edit))} putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} extendBeat={extendBeat} />}
+          batch={noteTargets.length ? { beats: noteTargets.map(({ beat }) => beat), changeRhythm: changeSelectedRhythm, changePitch: changeSelectedPitch } : undefined}
+          edit={(edit) => { clearNoteSelection(); commit((score) => changeBeat(score, position, edit)) }} putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} extendBeat={extendBeat} />}
         </PanelsSuspended.Provider>
         {(panel || scoreLabel || confirm || pasteWarning || barMenu) && <div className="inspector inspector-placeholder" aria-hidden="true" />}
         {track && !(panel || scoreLabel || confirm || pasteWarning || barMenu) && <PanelWidthHandle label={t('调整右侧栏宽度')} side="left"

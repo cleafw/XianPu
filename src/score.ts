@@ -179,6 +179,7 @@ export function buildScore(project: Project, part: string | null, settings: Sett
     target.defaultSystemsLayout = currentLayout.barsPerLine
     const mode = part ? track.layout.mode ?? track.mode : track.mode
     const piano = mode === 'piano'
+    const numbered = mode === 'numbered' || mode === 'staff-numbered'
     const percussion = mode === 'percussion'
     const transpose = percussion ? 0 : track.transpose ?? 0
     const voices = track.voices ?? []
@@ -192,12 +193,13 @@ export function buildScore(project: Project, part: string | null, settings: Sett
       if (index > 0 && index < project.measures.length && simileMarks[index] !== model.SimileMark.SecondOfDouble) target.addLineBreaks(index)
     }
     score.addTrack(target)
-    for (let staffIndex = 0; staffIndex < (piano ? 2 : 1); staffIndex++) {
-      const lower = staffIndex === 1
+    for (let staffIndex = 0; staffIndex < (piano ? 2 : numbered ? 1 + voices.length : 1); staffIndex++) {
+      const lower = piano && staffIndex === 1
+      const additionalNumbered = numbered && staffIndex > 0
       const staff = new model.Staff()
       staff.isPercussion = percussion
-      staff.showNumbered = mode === 'numbered' || mode === 'staff-numbered'
-      staff.showStandardNotation = mode !== 'numbered' && mode !== 'tab'
+      staff.showNumbered = numbered
+      staff.showStandardNotation = mode !== 'numbered' && mode !== 'tab' && !additionalNumbered
       staff.showTablature = mode === 'tab' || mode === 'staff-tab'
       staff.displayTranspositionPitch = -transpose
       if (track.tuning.length && !piano && !percussion) {
@@ -207,8 +209,10 @@ export function buildScore(project: Project, part: string | null, settings: Sett
         staff.stringTuning = new model.Tuning(translate(language, standard ? '标准定弦' : '自定义定弦'), openStrings, standard)
       }
       target.addStaff(staff)
-      const streams = voices.filter((voice) => !piano || (voice.staff ?? 0) === staffIndex).map((voice) => voice.bars)
-      if (!lower || split) streams.unshift(track.bars)
+      const streams = additionalNumbered ? [voices[staffIndex - 1].bars]
+        : mode === 'numbered' ? [track.bars]
+        : voices.filter((voice) => !piano || (voice.staff ?? 0) === staffIndex).map((voice) => voice.bars)
+      if (!additionalNumbered && mode !== 'numbered' && (!lower || split)) streams.unshift(track.bars)
       const legacyLyrics = streams.map((stream) => stream.some((bar) => bar.some((beat) => beat.lyric)))
       for (const [barIndex, measure] of project.measures.entries()) {
         const bar = new model.Bar()

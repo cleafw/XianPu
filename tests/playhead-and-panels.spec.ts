@@ -16,6 +16,7 @@ test('audition follows beats and repeated measures, scrolling into view without 
   })
   const cursor = page.locator('.score-cursor')
   await expect(cursor).toBeVisible()
+  await page.getByRole('button', { name: '简谱位置 2', exact: true }).click()
   await page.evaluate(() => {
     const marker = document.querySelector<HTMLElement>('.score-cursor')!
     const points: string[] = []
@@ -35,12 +36,30 @@ test('audition follows beats and repeated measures, scrolling into view without 
   await page.getByRole('button', { name: '▶ 试听' }).click()
   await expect(cursor).toHaveClass(/is-playing/, { timeout: 20_000 })
   await expect.poll(() => page.evaluate(() => (window as Window & { playheadPoints?: string[] }).playheadPoints?.join(' ')),
-    { timeout: 10_000 }).toContain('0:0 0:1 1:0 1:1 2:0 2:1 1:0 1:1 2:0')
+    { timeout: 10_000 }).toMatch(/^0:1 1:0 1:1 2:0 2:1 1:0 1:1 2:0/)
   await expect.poll(() => page.evaluate(() => (window as Window & { playheadLocations?: Set<string> }).playheadLocations?.size)).toBeGreaterThan(3)
   await expect.poll(() => page.locator('.canvas').evaluate((canvas) => canvas.scrollTop), { timeout: 8_000 }).toBeGreaterThan(150)
   await page.getByRole('button', { name: '■ 停止' }).click()
   await expect(cursor).not.toHaveClass(/is-playing/)
-  await expect(page.getByText('第 1 小节 · 位置 1', { exact: true })).toBeVisible()
+  await expect(page.getByText('第 1 小节 · 位置 2', { exact: true })).toBeVisible()
+})
+
+test('audition MIDI excludes notes before the selected beat and inherits the active tempo', async ({ page }) => {
+  const score = createProject('demo')
+  const track = score.tracks[0]
+  score.measures[1].bpm = 120
+  await page.goto('/')
+  const events = await page.evaluate(async ({ score, id }) => {
+    const { buildPlaybackMidi } = await import('/src/playback.ts') as typeof import('../src/playback')
+    const file = buildPlaybackMidi(score, id, { track: id, bar: 2, beat: 1 })
+    return {
+      notes: file.events.filter((event) => 'noteVelocity' in event && event.noteVelocity > 0).slice(0, 2)
+        .map((event) => ({ tick: event.tick, key: 'noteKey' in event ? event.noteKey : null })),
+      tempo: file.events.flatMap((event) => 'beatsPerMinute' in event ? [{ tick: event.tick, bpm: event.beatsPerMinute }] : []),
+    }
+  }, { score, id: track.id })
+  expect(events.notes).toEqual([{ tick: 0, key: 64 }, { tick: 960, key: 67 }])
+  expect(events.tempo).toEqual([{ tick: 0, bpm: 120 }])
 })
 
 test('collapses controls and keeps independent draggable panels connected to the selected note', async ({ page }) => {

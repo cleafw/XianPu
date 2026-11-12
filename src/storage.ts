@@ -5,6 +5,7 @@ import { languageOf, type Language, type Translate } from './i18n'
 
 const projectFilters = (t: Translate) => [{ name: t('叶子弦谱工程'), extensions: ['xianpu'] }]
 export const desktop = isTauri()
+export const maxProjectBytes = 16 * 1024 * 1024
 export const recoveryKey = 'xianpu.recovery.v1'
 export const readFile = (path: string) => invoke<string>('read_project', { path })
 export const readMidi = async (path: string) => new Uint8Array(await invoke<ArrayBuffer>('read_midi', { path }))

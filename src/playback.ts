@@ -159,6 +159,7 @@ function buildPlayback(project: Project, part: string | null, follow?: Position)
   if (!streams.length) throw new Error('请先录入音符。')
   const file = new midi.MidiFile()
   file.division = 960
+  const timing: (midi.TempoChangeEvent | midi.TimeSignatureEvent)[] = []
   let start = 0
   let tempo = 0
   let previousMeter: Meter | undefined
@@ -173,12 +174,12 @@ function buildPlayback(project: Project, part: string | null, follow?: Position)
     if (source !== index && capacity(project, source) !== capacity(project, index)) throw new Error('小节重复的原小节和目标小节拍数不同。')
     const meter = measureSettings(project, index).meter
     if (meter[0] !== previousMeter?.[0] || meter[1] !== previousMeter[1]) {
-      file.addEvent(new midi.TimeSignatureEvent(0, start, meter[0], Math.log2(meter[1]), 96 / meter[1], 8))
+      timing.push(new midi.TimeSignatureEvent(0, start, meter[0], Math.log2(meter[1]), 96 / meter[1], 8))
       previousMeter = meter
     }
     const bpm = project.measures[index].bpm ?? (rewind ? entranceTempo.get(index) : undefined) ?? (tempo || project.bpm)
     if (!entranceTempo.has(index)) entranceTempo.set(index, bpm)
-    if (tempo !== bpm) file.addEvent(new midi.TempoChangeEvent(start, Math.round(60_000_000 / bpm)))
+    if (tempo !== bpm) timing.push(new midi.TempoChangeEvent(start, Math.round(60_000_000 / bpm)))
     tempo = bpm
     if (cursorTrack && follow) {
       const voice = cursorTrack.id === follow.track ? follow.voice : 0
@@ -205,6 +206,22 @@ function buildPlayback(project: Project, part: string | null, follow?: Position)
     previousBar = index
   }
 
+  const first = follow ? points.findIndex(({ position }) => position.bar === follow.bar && position.beat === follow.beat) : 0
+  if (first < 0) throw new Error('所选位置不在试听路线中。')
+  const startTick = points[first]?.tick ?? 0
+  const priorTiming = new Map<number, typeof timing[number]>()
+  for (const event of timing) {
+    if (event.tick <= startTick) priorTiming.set(event.type, event)
+    else {
+      event.tick -= startTick
+      file.addEvent(event)
+    }
+  }
+  for (const event of priorTiming.values()) {
+    event.tick = 0
+    file.addEvent(event)
+  }
+
   const pitchRange = 36
   const percussionChannel = 9
   const drumKeys = new Set<number>()
@@ -221,30 +238,32 @@ function buildPlayback(project: Project, part: string | null, follow?: Position)
       file.addEvent(new midi.ControlChangeEvent(track, 0, channel, controller, value))
     }
     for (const note of trackSounds(timeline)) {
+      if (note.release <= startTick) continue
       const key = drums && (note.midi < 35 || note.midi > 81) ? 36 : note.midi
       if (drums) drumKeys.add(key)
-      file.addEvent(new midi.NoteOnEvent(track, note.start, channel, key, note.velocity))
+      file.addEvent(new midi.NoteOnEvent(track, Math.max(0, note.start - startTick), channel, key, note.velocity))
       const semitones = note.slideTo !== undefined ? note.slideTo - note.midi : note.bend ? 1 : 0
       if (!drums && semitones) {
         const rampStart = note.slideTo === undefined ? note.start : note.start + (note.release - note.start) * 0.55
         for (let step = 1; step <= 8; step++) {
           const tick = Math.min(note.release - 1, Math.round(rampStart + (note.release - rampStart) * step / 8))
+          if (tick < startTick) continue
           const ratio = Math.max(-1, Math.min(1, semitones / pitchRange)) * step / 8
           const wheel = Math.min(0xffffffff, Math.round(0x80000000 * (1 + ratio)))
-          file.addEvent(new midi.NoteBendEvent(track, tick, channel, key, wheel))
+          file.addEvent(new midi.NoteBendEvent(track, tick - startTick, channel, key, wheel))
         }
       }
-      file.addEvent(new midi.NoteOffEvent(track, note.release, channel, key, 0))
+      file.addEvent(new midi.NoteOffEvent(track, note.release - startTick, channel, key, 0))
     }
   }
   // AlphaSynth uses channel 9 to decide which percussion samples to decode.
   for (const key of drumKeys) file.addEvent(new midi.NoteOnEvent(0, 0, percussionChannel, key, 0))
-  file.addEvent(new midi.EndOfTrackEvent(0, start))
-  return { file, points }
+  file.addEvent(new midi.EndOfTrackEvent(0, start - startTick))
+  return { file, points: points.slice(first).map(({ tick, position }) => ({ tick: tick - startTick, position })) }
 }
 
-export function buildPlaybackMidi(project: Project, part: string | null) {
-  return buildPlayback(project, part).file
+export function buildPlaybackMidi(project: Project, part: string | null, start?: Position) {
+  return buildPlayback(project, part, start).file
 }
 
 function getPlayer() {

@@ -55,7 +55,6 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
   const layoutPre = pre.doLayout.bind(pre)
   const paintPre = pre.paint.bind(pre)
   let basePreWidth = 0
-  let baseShift = 0
   pre.doLayout = () => {
     layoutPre()
     basePreWidth = pre.width
@@ -69,7 +68,7 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
     pre.computedWidth = pre.width
   }
   pre.paint = (cx, cy, canvas) => {
-    paintPre(cx + pre.width - basePreWidth, cy + baseShift, canvas)
+    paintPre(cx + pre.width - basePreWidth, cy, canvas)
     if (!pre.skipLayout) for (const row of extras) {
       row.pre.paint(cx + pre.x + pre.width - row.pre.width, cy + pre.y + row.y, canvas)
     }
@@ -84,8 +83,8 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
   on.doLayout = () => {
     layoutNotes()
     const base = on.noteHeads
-    baseShift = 0
     if (!base) return
+    // Keep the lowest number on the staff baseline and stack the remaining notes upward.
     let upperEdge = base.getBoundingBoxTop()
     for (const row of extras) {
       row.on.renderer = on.renderer
@@ -96,10 +95,6 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
       row.y = upperEdge - head.getBoundingBoxBottom() - 3
       upperEdge = row.y + head.getBoundingBoxTop()
     }
-    // Put the center of the entire stack on the normal numbered-note baseline.
-    baseShift = base.y - (upperEdge + base.getBoundingBoxBottom()) / 2
-    base.y += baseShift
-    for (const row of extras) row.y += baseShift
   }
   on.paint = (cx, cy, canvas) => {
     paintNotes(cx, cy, canvas)
