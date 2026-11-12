@@ -13,16 +13,19 @@ type BeatGlyph = Glyph & {
   doLayout(): void
 }
 type NoteGlyph = BeatGlyph & {
-  noteHeads: Glyph | null; onTimeX: number
+  noteHeads: NumberedHead | null; onTimeX: number
   getNoteY(note: model.Note, position: number): number
   getHighestNoteY(position: number): number
   buildBoundingsLookup(bounds: rendering.BeatBounds, cx: number, cy: number): void
 }
+type NumberedHead = Glyph & { height: number; _octaveDots: number; _octaveDotsY: number }
 type BeatContainer = { beat?: model.Beat; preNotes?: BeatGlyph & { skipLayout: boolean }; onNotes?: NoteGlyph; barCount?: number }
+type NumberedBeam = { beats: model.Beat[]; isRestBeamHelper: boolean }
 type BarRenderer = {
   width: number
   height: number
   topOverflow: number
+  bottomOverflow: number
   calculateOverflows(top: number, bottom: number): void
   beatGlyphsStart: number
   postBeatGlyphsStart: number
@@ -34,7 +37,9 @@ type BarRenderer = {
   createPostBeatGlyphs(): void
   buildBoundingsLookup(master: rendering.MasterBarBounds, cx: number, cy: number): void
   addBeatGlyph(container: BeatContainer): void
-  shouldPaintBeamingHelper(helper: { isRestBeamHelper: boolean }): boolean
+  shouldPaintBeamingHelper(helper: NumberedBeam): boolean
+  calculateBeamY(helper: NumberedBeam, x: number): number
+  paintBar(cx: number, cy: number, canvas: platform.ICanvas, helper: NumberedBeam, element: number): void
   beamSpacing: number
   beamThickness: number
 }
@@ -43,7 +48,9 @@ type RendererFactory = { staffId: string; create(renderer: unknown, bar: model.B
 const appScores = new WeakMap<model.Score, { intro?: IntroRange; hiddenKeys?: readonly number[] }>()
 const introBounds = new WeakMap<rendering.BarBounds, { width: number; start: number; end: number }>()
 type StackLayout = { heads: () => (Glyph | null)[]; place: (offsets: readonly number[]) => void }
-const numberedStacks = new WeakMap<BarRenderer, StackLayout[]>()
+type NumberedLayout = { stacks: StackLayout[]; notes: NoteGlyph[]; lines: number }
+const numberedLayouts = new WeakMap<BarRenderer, NumberedLayout>()
+const originalDotY = new WeakMap<NumberedHead, number>()
 const introPadding = 14
 let installed = false
 
@@ -152,8 +159,11 @@ function stack(container: BeatContainer, notes: model.Note[], pre: BeatGlyph & {
   }
 }
 
+const underlineSpacing = (renderer: BarRenderer) => renderer.beamSpacing + renderer.beamThickness
+const underlineTop = (glyph: NoteGlyph, head: NumberedHead) => glyph.y + head.y + head.height / 2 + 2
+
 function underlineRest(renderer: BarRenderer, glyph: NoteGlyph, lines: number) {
-  const spacing = renderer.beamSpacing + renderer.beamThickness
+  const spacing = underlineSpacing(renderer)
   const paint = glyph.paint.bind(glyph)
   const bottom = glyph.getBoundingBoxBottom.bind(glyph)
   glyph.getBoundingBoxBottom = () => bottom() + 2 + lines * spacing
@@ -162,7 +172,7 @@ function underlineRest(renderer: BarRenderer, glyph: NoteGlyph, lines: number) {
     const head = glyph.noteHeads
     if (!head) return
     const x = cx + glyph.x + head.x
-    const y = cy + glyph.y + head.getBoundingBoxBottom() + 2
+    const y = cy + underlineTop(glyph, head)
     for (let line = 0; line < lines; line++) {
       canvas.fillRect(x, y + line * spacing, head.width, renderer.beamThickness)
     }
@@ -249,8 +259,23 @@ function tagStaffKey(renderer: BarRenderer, bar: number, hidden: boolean) {
 }
 
 function patchNumberedNotation(result: BarRenderer) {
-  const stacks: StackLayout[] = []
-  numberedStacks.set(result, stacks)
+  const layout: NumberedLayout = { stacks: [], notes: [], lines: 0 }
+  numberedLayouts.set(result, layout)
+  const mainNotes = new Map<model.Beat, { glyph: NoteGlyph; lines: number }>()
+  const calculateBeamY = result.calculateBeamY.bind(result)
+  const paintBar = result.paintBar.bind(result)
+  result.paintBar = (cx, cy, canvas, helper, element) => {
+    // alphaTab paints one segment per beat, from the lowest line upward.
+    // Use the beat's line count to keep the shared top line at the digit baseline.
+    let index = 0
+    result.calculateBeamY = (beam, x) => {
+      const note = mainNotes.get(beam.beats[index++])
+      const head = note?.glyph.noteHeads
+      if (!note || !head || !note.lines) return calculateBeamY(beam, x)
+      return underlineTop(note.glyph, head) + result.beamThickness + (note.lines - 1) * underlineSpacing(result)
+    }
+    try { paintBar(cx, cy, canvas, helper, element) } finally { result.calculateBeamY = calculateBeamY }
+  }
   // A rest-only beam has no highest note for alphaTab's overflow calculation.
   // Short rests draw their duration underlines with the zero glyph instead.
   const shouldPaint = result.shouldPaintBeamingHelper.bind(result)
@@ -258,17 +283,26 @@ function patchNumberedNotation(result: BarRenderer) {
   const add = result.addBeatGlyph.bind(result)
   result.addBeatGlyph = (container) => {
     const { beat, preNotes, onNotes, barCount } = container
-    if (beat && beat.notes.length > 1 && preNotes && onNotes) stacks.push(stack(container, beat.notes, preNotes, onNotes))
-    if (beat?.isRest && !beat.isEmpty && onNotes) {
-      const lines = barCount ?? Math.log2(beat.duration / 4)
-      if (lines > 0) underlineRest(result, onNotes, lines)
+    if (beat && !beat.isEmpty && onNotes) {
+      const lines = Math.max(0, barCount ?? Math.log2(beat.duration / 4))
+      if (!beat.graceType) {
+        layout.notes.push(onNotes)
+        layout.lines = Math.max(layout.lines, lines)
+        if (barCount === undefined) mainNotes.set(beat, { glyph: onNotes, lines })
+        else {
+          const main = mainNotes.get(beat)
+          if (main) main.lines = Math.max(main.lines, lines)
+        }
+      }
+      if (beat.notes.length > 1 && preNotes) layout.stacks.push(stack(container, beat.notes, preNotes, onNotes))
+      if (beat.isRest && lines > 0) underlineRest(result, onNotes, lines)
     }
     add(container)
   }
 }
 
 type Staff = {
-  topPadding: number; topOverflow: number; bottomPadding: number; height: number
+  topPadding: number; topOverflow: number; bottomPadding: number; bottomOverflow: number; height: number
   trackIndex: number; staffId: string; isVisible: boolean
   _applyStaffPaddings(): void
   resetSharedLayoutData(): void
@@ -295,12 +329,24 @@ function pageLayout(api: AlphaTabApi) {
   return (api.renderer as unknown as { instance?: { layout: PageLayout } }).instance?.layout
 }
 
-function alignNumberedStacks(system: System) {
+function alignNumberedNotation(system: System) {
   for (const staff of system.allStaves) {
     if (staff.staffId !== 'numbered') continue
-    const bars = staff.barRenderers.filter((bar) => numberedStacks.get(bar)?.length)
-    const stacks = bars.flatMap((bar) => numberedStacks.get(bar)!)
-    if (!stacks.length) continue
+    const bars = staff.barRenderers.flatMap((bar) => {
+      const layout = numberedLayouts.get(bar)
+      return layout ? [{ bar, layout }] : []
+    })
+    const lines = Math.max(0, ...bars.map(({ layout }) => layout.lines))
+    const stacks = bars.flatMap(({ layout }) => layout.stacks)
+    // Reserve the same depth for underlines before placing the lowest row's dots.
+    for (const { bar, layout } of bars) {
+      for (const { noteHeads: head } of layout.notes) {
+        if (!head || head._octaveDots >= 0) continue
+        const y = originalDotY.get(head) ?? head._octaveDotsY
+        originalDotY.set(head, y)
+        head._octaveDotsY = y + (lines ? 2 + bar.beamThickness + (lines - 1) * underlineSpacing(bar) : 0)
+      }
+    }
     const spacing: number[] = []
     for (const stack of stacks) {
       const heads = stack.heads()
@@ -316,9 +362,10 @@ function alignNumberedStacks(system: System) {
     const offsets = [0]
     for (let row = 1; row < spacing.length; row++) offsets[row] = offsets[row - 1] - spacing[row]
     for (const stack of stacks) stack.place(offsets)
-    for (const bar of bars) {
+    for (const { bar } of bars) {
       bar.calculateOverflows(0, bar.height)
       staff.topOverflow = Math.max(staff.topOverflow, bar.topOverflow)
+      staff.bottomOverflow = Math.max(staff.bottomOverflow, bar.bottomOverflow)
     }
   }
 }
@@ -352,7 +399,7 @@ export function spaceTrackMarks(api: AlphaTabApi, padding: { above: number; belo
   }
   const fit = layout._fitSystem.bind(layout)
   layout._fitSystem = (system) => {
-    alignNumberedStacks(system)
+    alignNumberedNotation(system)
     if (gap >= 0) { fit(system); return }
     const heights = new Map<number, number>()
     for (const staff of system.allStaves) {

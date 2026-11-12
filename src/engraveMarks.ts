@@ -208,9 +208,18 @@ function pointMark(fragment: Fragment, anchor: Anchor, mark: ScoreMark, scale: n
   const group = svg('g', { 'data-mark': mark.id, 'data-code': mark.code })
   const value = mark.code === 'text' ? mark.text ?? '' : markSymbol(mark.code, below)
   if (value === '') return
-  const text = label(group, value, scale)
   fragment.group.append(group)
-  const bounds = labelInk(text, Math.max(1, fragment.width - (mark.string ? 16 : 4) * scale))
+  let bounds: Box
+  if (typeof value === 'object') {
+    const path = svg('path', { d: value.path, transform: `scale(${scale})`, fill: 'none', stroke: '#171717',
+      'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
+    group.append(path)
+    const ink = path.getBBox()
+    bounds = { left: (ink.x - 1) * scale, right: (ink.x + ink.width + 1) * scale,
+      top: (ink.y - 1) * scale, bottom: (ink.y + ink.height + 1) * scale }
+  } else {
+    bounds = labelInk(label(group, value, scale), Math.max(1, fragment.width - (mark.string ? 16 : 4) * scale))
+  }
   if (mark.string) {
     const stringNumber = label(group, 0xe833 + mark.string, scale * 0.44)
     const number = labelInk(stringNumber)
@@ -237,6 +246,9 @@ const lineLabels: Partial<Record<SpanKind, string | number>> = {
   ottavaUp: smufl.OttavaAlta,
   ottavaDown: smufl.OttavaBassaVb,
   pedal: smufl.KeyboardPedalPed,
+  trillLine: smufl.OrnamentTrill,
+  letRingLine: 'l.r.',
+  pipaLongRoll: '*',
 }
 
 function rangeSegment(lane: Lane, span: SpanEnd, x1: number, x2: number, first: boolean, last: boolean,
@@ -274,7 +286,7 @@ function rangeSegment(lane: Lane, span: SpanEnd, x1: number, x2: number, first: 
   } else if (isSlur) {
     const height = Math.min(9 * scale, (x2 - x1) / 6)
     d = `M ${x1} ${first ? 0 : -height / 2} Q ${(x1 + x2) / 2} ${-1.8 * height} ${x2} ${last ? 0 : -height / 2}`
-  } else if (span.kind === 'roll' || span.kind === 'flutter') {
+  } else if (['roll', 'flutter', 'trillLine', 'glissandoLine'].includes(span.kind)) {
     d = `M ${startX} 0`
     for (let x = startX; x < x2; x += 6 * scale) {
       d += ` Q ${x + 1.5 * scale} ${-3 * scale} ${Math.min(x + 3 * scale, x2)} 0`
@@ -284,7 +296,7 @@ function rangeSegment(lane: Lane, span: SpanEnd, x1: number, x2: number, first: 
     d = `M ${startX} 0 H ${x2}${last && span.kind !== 'lyricExtend' ? ` v ${-direction * 4 * scale}` : ''}`
   }
   const path = svg('path', { d, fill: 'none', stroke: '#171717', 'stroke-width': 1.15 * scale, 'stroke-linecap': 'round' })
-  if (['custom', 'palmMute', 'ottavaUp', 'ottavaDown'].includes(span.kind)) {
+  if (['custom', 'palmMute', 'ottavaUp', 'ottavaDown', 'letRingLine'].includes(span.kind)) {
     path.setAttribute('stroke-dasharray', `${4 * scale} ${2.6 * scale}`)
   }
   group.append(path)

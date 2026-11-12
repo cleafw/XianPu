@@ -2,6 +2,53 @@ import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { createProject, parseProject } from '../src/model'
 
+test('edits multiple bars from the entry panel and undoes each batch together', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  const count = entry.getByRole('spinbutton', { name: '小节数量' })
+  const bars = entry.locator('[data-measure-index]')
+  const insert = entry.getByRole('button', { name: '插入小节', exact: true })
+  const deleteSelected = entry.getByRole('button', { name: '从选中处删除小节' })
+  const deleteEnd = entry.getByRole('button', { name: '从曲尾删除小节' })
+  const undo = page.getByRole('button', { name: '撤销', exact: true })
+  const readDraft = () => page.evaluate(() => JSON.parse(localStorage.getItem('xianpu.recovery.v1')!))
+  const original = await readDraft()
+
+  await count.fill('0')
+  await expect(insert).toBeDisabled()
+  await expect(deleteEnd).toBeDisabled()
+  await count.fill('3')
+  await bars.nth(1).click()
+  await insert.click()
+  await expect(bars).toHaveCount(11)
+  await expect(bars.nth(2)).toHaveAttribute('data-current', 'true')
+  for (const [index, track] of (await readDraft()).tracks.entries()) {
+    expect(track.bars).toEqual([...original.tracks[index].bars.slice(0, 2), [], [], [], ...original.tracks[index].bars.slice(2)])
+  }
+  await undo.click()
+  await expect(bars).toHaveCount(8)
+
+  await count.fill('2')
+  await bars.nth(3).click()
+  await bars.nth(1).click({ modifiers: ['Shift'] })
+  await deleteSelected.click()
+  await expect(bars).toHaveCount(6)
+  expect((await readDraft()).tracks[0].bars).toEqual([original.tracks[0].bars[0], ...original.tracks[0].bars.slice(3)])
+  await undo.click()
+  await expect(bars).toHaveCount(8)
+
+  await bars.last().click()
+  await expect(deleteSelected).toBeDisabled()
+  await deleteEnd.click()
+  await expect(bars).toHaveCount(6)
+  expect((await readDraft()).tracks[0].bars).toEqual(original.tracks[0].bars.slice(0, 6))
+  await undo.click()
+  await expect(bars).toHaveCount(8)
+  await count.fill('8')
+  await expect(deleteEnd).toBeDisabled()
+})
+
 test('repeated measure insertion preserves the scrolled score and advances to the inserted bar', async ({ page }) => {
   const project = createProject('demo')
   project.layout.barsPerLine = 1
@@ -146,6 +193,46 @@ test('adds bamboo flute symbols from the grid and list and prints the same signs
   const paper = page.getByRole('dialog').locator('.print-page')
   await expect(paper.locator('[data-code=fluteTrill] .at text')).toHaveText(previewGlyph!)
   await expect(paper.locator('[data-code=fluteZeng] text')).toHaveText('贝')
+})
+
+test('finds the two flute run signs by alias and prints the same graphics and grace notes', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await page.getByRole('navigation').getByRole('button', { name: '简谱', exact: true }).click()
+  const editor = page.getByRole('region', { name: '录入面板' })
+  await editor.getByRole('button', { name: '记号面板', exact: true }).click()
+  const search = editor.getByRole('searchbox', { name: '搜索记号' })
+  const category = editor.getByRole('combobox', { name: '记号类别' })
+  await category.selectOption('竹笛')
+  await search.fill('立音')
+  const choices = editor.getByRole('group', { name: '可用记号' })
+  const up = choices.getByRole('button', { name: '上历音', exact: true })
+  const down = choices.getByRole('button', { name: '下历音', exact: true })
+  const upPath = await up.locator('svg path').getAttribute('d')
+  const downPath = await down.locator('svg path').getAttribute('d')
+  expect(upPath).not.toBe(downPath)
+  await up.click()
+  await down.click()
+  await expect(page.locator('.canvas [data-code=fluteRunUp] path')).toHaveAttribute('d', upPath!)
+  await expect(page.locator('.canvas [data-code=fluteRunDown] path')).toHaveAttribute('d', downPath!)
+
+  await category.selectOption('通用')
+  await search.fill('分解和弦')
+  await choices.getByRole('button', { name: '上行琶音', exact: true }).click()
+  await search.fill('小音符')
+  await editor.getByText('录入小音符（倚音）', { exact: true }).click()
+  const pitch = editor.getByRole('combobox', { name: '倚音音高' })
+  for (const value of ['60', '69', '71']) {
+    await pitch.selectOption(value)
+    await editor.getByRole('button', { name: '添加前倚音' }).click()
+  }
+  const data = await page.evaluate(() => JSON.parse(localStorage.getItem('xianpu.recovery.v1')!))
+  expect(parseProject(JSON.stringify(data)).tracks[0].bars[0][0].grace).toEqual([60, 69, 71])
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  const paper = page.getByRole('dialog').locator('.print-page')
+  await expect(paper.locator('[data-code=fluteRunUp] path')).toHaveAttribute('d', upPath!)
+  await expect(paper.locator('[data-code=fluteRunDown] path')).toHaveAttribute('d', downPath!)
+  await expect(paper.locator('[data-code=arpeggioUp] path')).toHaveCount(1)
 })
 
 test('shows one numbered key per change and lets overlapping spacing and part labels be edited', async ({ page }) => {

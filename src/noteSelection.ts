@@ -1,4 +1,4 @@
-import { beatList, blank, durations, matchingTie, voiceBars, type Beat, type Position, type Project, type Track } from './model.ts'
+import { beatList, blank, capacity, durations, matchingTie, ticks, voiceBars, type Beat, type Position, type Project, type Track } from './model.ts'
 import { guitarFingering } from './keyChange.ts'
 
 export type RhythmEdit = 'shorten' | 'lengthen' | 'add-extension' | 'remove-extension'
@@ -105,9 +105,11 @@ export function clearSelectedNotes(score: Project, targets: SelectedBeat[]) {
 }
 
 export type NoteClipboard = { beats: Beat[]; tuning: number[] }
-export function copySelectedNotes(targets: SelectedBeat[], track: Track): NoteClipboard {
+export function copySelectedNotes(score: Project, targets: SelectedBeat[], track: Track): NoteClipboard {
+  targets = targets.map((target) => target.notes?.size === target.beat.notes.length ? { ...target, notes: null } : target)
   const adjacent = (left: Position, right: Position) => left.bar === right.bar && left.beat + 1 === right.beat ||
-    left.bar + 1 === right.bar && right.beat === 0 && left.beat === voiceBars(track, left.voice)[left.bar].length - 1
+    left.bar + 1 === right.bar && right.beat === 0 &&
+      left.beat === beatList(score, voiceBars(track, left.voice)[left.bar], left.bar).length - 1
   const groupSizes = new Map<string, number>()
   const spans = new Map<string, { start?: number; end?: number }>()
   targets.forEach(({ beat, notes }, index) => {
@@ -140,15 +142,24 @@ export function copySelectedNotes(targets: SelectedBeat[], track: Track): NoteCl
 
 export function pasteSelectedNotes(score: Project, position: Position, clipboard: NoteClipboard) {
   const track = score.tracks.find(({ id }) => id === position.track)
-  if (!track) return { error: 'space' } as const
+  if (!track || !clipboard.beats.length) return { error: 'space' } as const
   const bars = voiceBars(track, position.voice)
   const positions: Position[] = []
   for (let bar = position.bar; bar < bars.length && positions.length < clipboard.beats.length; bar++) {
     if (score.measures[bar].simile) return { error: 'space' } as const
-    const count = beatList(score, bars[bar], bar).length
-    for (let beat = bar === position.bar ? position.beat : 0; beat < count && positions.length < clipboard.beats.length; beat++) {
+    const original = beatList(score, bars[bar], bar)
+    const first = bar === position.bar ? position.beat : 0
+    const limit = capacity(score, bar)
+    let offset = original.slice(0, first).reduce((sum, beat) => sum + ticks(beat), 0)
+    if (offset > limit + 1e-7) return { error: 'barline' } as const
+    for (let beat = first; beat < 256 && positions.length < clipboard.beats.length; beat++) {
+      if (offset >= limit - 1e-7) break
+      const end = offset + ticks(clipboard.beats[positions.length])
+      if (end > limit + 1e-7) return { error: 'barline' } as const
       positions.push({ ...position, bar, beat, note: undefined, string: undefined })
+      offset = end
     }
+    if (positions.length < clipboard.beats.length && offset < limit - 1e-7) return { error: 'space' } as const
   }
   if (positions.length < clipboard.beats.length) return { error: 'space' } as const
 

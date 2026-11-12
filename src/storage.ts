@@ -7,6 +7,35 @@ const projectFilters = (t: Translate) => [{ name: t('叶子弦谱工程'), exten
 export const desktop = isTauri()
 export const maxProjectBytes = 16 * 1024 * 1024
 export const recoveryKey = 'xianpu.recovery.v1'
+const recentProjectsKey = 'xianpu.recent-projects.v1'
+const recentProjectLimit = 10
+export type RecentProject = { path: string; title: string }
+
+export function readRecentProjects(): RecentProject[] {
+  if (!desktop) return []
+  try {
+    const entries: unknown = JSON.parse(localStorage.getItem(recentProjectsKey) ?? '[]')
+    if (Array.isArray(entries)) {
+      return entries.filter((entry): entry is RecentProject =>
+        typeof entry?.path === 'string' && !!entry.path && typeof entry.title === 'string',
+      ).slice(0, recentProjectLimit)
+    }
+  } catch { /* A missing or unreadable history starts empty. */ }
+  return []
+}
+
+export function saveRecentProjects(entries: RecentProject[]) {
+  try { localStorage.setItem(recentProjectsKey, JSON.stringify(entries)) }
+  catch { /* History is optional and does not affect the project file. */ }
+}
+
+export function rememberProject(entries: RecentProject[], project: RecentProject): RecentProject[] {
+  const pathKey = (path: string) => path.replaceAll('/', '\\').toLowerCase()
+  const key = pathKey(project.path)
+  return [project, ...entries.filter((entry) => pathKey(entry.path) !== key)].slice(0, recentProjectLimit)
+}
+
+export const existingProjectPaths = (paths: string[]) => invoke<string[]>('existing_project_paths', { paths })
 export const readFile = (path: string) => invoke<string>('read_project', { path })
 export const readMidi = async (path: string) => new Uint8Array(await invoke<ArrayBuffer>('read_midi', { path }))
 export const writeFile = (path: string, data: string) => invoke('write_project', { path, data })

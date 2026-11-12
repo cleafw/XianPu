@@ -25,13 +25,18 @@ function entryLane(master: MasterBar, bar: StaffBar, mode?: Mode): Position['lan
   return entries.length > 1 ? entries[0] === bar ? 'staff' : mode === 'staff-numbered' ? 'numbered' : 'tab' : undefined
 }
 
-export function ScoreView({ project, part, position, playhead, selectedBars = [], selectedNotes = [], scale = 1, print = false, onSelect, onNoteSelect, onNoteRange, onLabelSelect, onBarSelect, onBarRange, onBarMenu, onReady, onError }: {
+function isMeasureNumber(target: EventTarget | null, bar: number) {
+  const text = target instanceof Element ? target.closest('text') : null
+  return text?.textContent === String(bar + 1) && /c80000|200,\s*0,\s*0/i.test(text.getAttribute('fill') ?? '')
+}
+
+export function ScoreView({ project, part, position, playhead, selectedBars = [], selectedNotes = [], scale = 1, print = false, onSelect, onNoteSelect, onNoteRange, onLabelSelect, onBarSelect, onBarRange, onClipboardMenu, onReady, onError }: {
   project: Project; part: string | null; position?: Position; playhead?: Position | null; selectedBars?: number[]; scale?: number; print?: boolean; onSelect?: (position: Position) => void;
   selectedNotes?: Position[]; onNoteSelect?: (position: Position, event: MouseEvent) => void;
   onNoteRange?: (start: Position, end: Position) => void;
   onBarSelect?: (position: Position, event: MouseEvent) => void;
   onBarRange?: (start: Position, end: number) => void;
-  onBarMenu?: (position: Position, event: MouseEvent) => void;
+  onClipboardMenu?: (position: Position, event: MouseEvent, kind: 'measure' | 'note') => void;
   onLabelSelect?: (kind: ScoreLabelKind, bar: number) => void;
   onReady?: (systems: number, firstBars: number[]) => void; onError?: (error: Error) => void
 }) {
@@ -307,8 +312,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
         if (selectLabel(event.target)) return
         const target = positionAt(event)
         if (!target) return
-        const clicked = event.target instanceof Element ? event.target.closest('text') : null
-        const isBarNumber = clicked?.textContent === String(target.bar + 1) && /c80000|200,\s*0,\s*0/i.test(clicked.getAttribute('fill') ?? '')
+        const isBarNumber = isMeasureNumber(event.target, target.bar)
         const modifier = event.shiftKey || event.ctrlKey || event.metaKey
         const note = target.noteHit && !isBarNumber
         if (modifier && note && onNoteSelect) {
@@ -319,11 +323,11 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
         if (!modifier && (onBarRange || onNoteRange)) drag.start(event, target, note && !!onNoteRange)
       } : undefined} onKeyDown={onLabelSelect ? (event) => {
         if ((event.key === 'Enter' || event.key === ' ') && selectLabel(event.target)) event.preventDefault()
-      } : undefined} onContextMenu={onBarMenu ? (event) => {
+      } : undefined} onContextMenu={onClipboardMenu ? (event) => {
         const target = positionAt(event)
         if (!target) return
-        event.preventDefault()
-        onBarMenu(target, event)
+        const kind = target.noteHit && !isMeasureNumber(event.target, target.bar) ? 'note' : 'measure'
+        onClipboardMenu(target, event, kind)
       } : undefined} />
     {position && <div ref={highlights} aria-hidden="true" />}
     {position && <div ref={cursor} className={'score-cursor' + (playhead ? ' is-playing' : '')} data-play-measure={playhead?.bar} data-play-beat={playhead?.beat} aria-hidden="true" hidden />}

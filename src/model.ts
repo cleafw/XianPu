@@ -1,6 +1,6 @@
 import { isSound } from './sounds.ts'
 import { validPaper, type Paper } from './paper.ts'
-import { spanKinds, symbols, type ScoreMark, type SpanEnd } from './notationMarks.ts'
+import { spanKinds, symbolCategories, symbols, type ScoreMark, type SpanEnd } from './notationMarks.ts'
 import type { NavigationDirection, NavigationMeasure } from './scoreNavigation.ts'
 
 export type Mode = 'numbered' | 'tab' | 'staff' | 'staff-tab' | 'staff-numbered' | 'piano' | 'percussion'
@@ -36,8 +36,7 @@ export type Track = {
   id: string; name: string; kind: Kind; mode: Mode; sound?: number; tuning: number[]; bars: Beat[][]; layout: Layout
   clef?: 'treble' | 'alto' | 'bass'; transpose?: number; capo?: number; scoreNote?: string; voices?: Voice[]; technique?: keyof typeof techniqueGroups
 }
-export const techniqueGroups = { '通用': 'General', '人声': 'Voice', '竹笛': 'Bamboo flute', '古筝': 'Guzheng', '吉他': 'Guitar',
-  '弓弦': 'Bowed strings', '管乐': 'Winds', '键盘': 'Keyboard', '打击乐': 'Percussion' } as const
+export const techniqueGroups = symbolCategories
 export function voiceBars(track: Track, voice = 0) {
   return voice ? track.voices?.[voice - 1]?.bars ?? track.bars : track.bars
 }
@@ -59,7 +58,7 @@ const intervals = [0, 2, 4, 5, 7, 9, 11]
 export const layout = (): Layout => ({ barsPerLine: 4, systemsPerPage: 3 })
 export function shiftedLayout(layout: Layout, index: number, delta: number): Layout {
   const shift = (bars?: number[], first = 1) => bars?.flatMap((bar) =>
-    delta < 0 && bar === index ? [] : [bar >= index ? bar + delta : bar]).filter((bar) => bar >= first && bar < 256)
+    delta < 0 && bar >= index && bar < index - delta ? [] : [bar >= index ? bar + delta : bar]).filter((bar) => bar >= first && bar < 256)
   const hiddenLabels = layout.hiddenLabels && { key: shift(layout.hiddenLabels.key, 0), tempo: shift(layout.hiddenLabels.tempo, 0) }
   return { ...layout, systemBreaks: shift(layout.systemBreaks), pageBreaks: shift(layout.pageBreaks), hiddenLabels }
 }
@@ -72,22 +71,34 @@ export function shiftedIntro(intro: Project['intro'], index: number, delta: numb
     if (index <= last) shifted[1] += delta
     return shifted
   }
-  if (index === first && first === last) return
-  shifted[0] -= Number(index < first)
-  shifted[1] -= Number(index <= last)
-  if (shifted.length > 2 && index === first) shifted[2] = null
-  if (shifted.length > 2 && index === last) shifted[3] = null
+  const end = index - delta
+  if (index <= first && last < end) return
+  if (first >= index) shifted[0] = Math.max(first, end) + delta
+  if (last >= index) shifted[1] = last < end ? index - 1 : last + delta
+  if (shifted.length > 2 && index <= first && first < end) shifted[2] = null
+  if (shifted.length > 3 && index <= last && last < end) shifted[3] = null
   return shifted
 }
 export function shiftedEndings(measures: Measure[], index: number, delta: number) {
+  if (delta < 0) {
+    const end = index - delta
+    const result = measures.slice()
+    measures.forEach((measure, bar) => {
+      if (!measure.ending) return
+      const after = bar + (measure.ending.length ?? 1)
+      const overlap = Math.min(after, end) - Math.max(bar, index)
+      if (overlap <= 0 || overlap === after - bar) return
+      const start = bar < index ? bar : end
+      if (result[start] && (start === bar || !result[start].ending)) {
+        result[start] = { ...result[start], ending: { ...measure.ending, length: after - bar - overlap } }
+      }
+    })
+    return result
+  }
   return measures.map((measure, bar) => {
-    const previous = measures[bar - 1]?.ending
-    if (delta < 0 && bar === index + 1 && previous && (previous.length ?? 1) > 1 && !measure.ending) {
-      return { ...measure, ending: { ...previous, length: previous.length! - 1 } }
-    }
     const end = measure.ending
     return end && bar < index && index < bar + (end.length ?? 1)
-      ? { ...measure, ending: { ...end, length: Math.max(1, (end.length ?? 1) + delta) } }
+      ? { ...measure, ending: { ...end, length: (end.length ?? 1) + delta } }
       : measure
   })
 }
@@ -108,6 +119,60 @@ export function measureSettings(score: Project, bar: number) {
     bpm = measure?.bpm ?? bpm
   }
   return { meter, key, bpm }
+}
+
+export function changeMeasures(score: Project, index: number, delta: number): Project {
+  const length = score.measures.length
+  const removed = Math.max(0, -delta)
+  const added = Math.max(0, delta)
+  const end = index + removed
+  if (!Number.isInteger(index) || !Number.isInteger(delta) || !delta || index < 0 || end > length ||
+    length + delta < 1 || length + delta > 256 ||
+    added && (index === 0 || score.measures[index]?.simile === 'double-second')) return score
+
+  const measures = shiftedEndings(score.measures, index, delta)
+  measures.splice(index, removed, ...Array.from({ length: added }, () => ({})))
+  if (removed) {
+    if (measures[index - 1]?.simile === 'double' && score.measures[index]?.simile === 'double-second') {
+      measures[index - 1] = { ...measures[index - 1], simile: undefined }
+    }
+    if (measures[index]?.simile === 'double-second' && score.measures[end - 1]?.simile === 'double') {
+      measures[index] = { ...measures[index], simile: undefined }
+    }
+    if (measures[index]) {
+      // Keep the effective settings of the first surviving measure at the join.
+      const previous = measureSettings(score, index - 1)
+      const next = measureSettings(score, end)
+      const current = measures[index]
+      measures[index] = {
+        ...current,
+        meter: current.meter ?? (previous.meter.join() !== next.meter.join() ? next.meter : undefined),
+        key: current.key ?? (previous.key !== next.key ? next.key : undefined),
+        bpm: current.bpm ?? (previous.bpm !== next.bpm ? next.bpm : undefined),
+      }
+    }
+  }
+
+  function spliceVoice(original: Beat[][]) {
+    const bars = original.slice()
+    const removedBars = bars.splice(index, removed, ...Array.from({ length: added }, () => [] as Beat[]))
+    const spans = new Set(removedBars.flatMap((bar) => bar.flatMap((beat) => beat.spans?.map(({ id }) => id) ?? [])))
+    const before = bars[index - 1]
+    const after = bars[index + added]
+    const last = before?.findLastIndex((beat) => !beat.draft) ?? -1
+    if (before?.[last]?.slur) bars[index - 1] = before.map((beat, offset) => offset === last ? { ...beat, slur: false } : beat)
+    if (after?.[0]?.tie) bars[index + added] = [{ ...after[0], tie: false }, ...after.slice(1)]
+    return spans.size ? bars.map((bar) => bar.map((beat) => beat.spans?.some(({ id }) => spans.has(id))
+      ? { ...beat, spans: beat.spans.filter(({ id }) => !spans.has(id)) } : beat)) : bars
+  }
+
+  return { ...score, measures, pickup: index === 0 ? 0 : score.pickup,
+    intro: shiftedIntro(score.intro, index, delta), layout: shiftedLayout(score.layout, index, delta),
+    tracks: score.tracks.map((track) => ({
+      ...track, bars: spliceVoice(track.bars), layout: shiftedLayout(track.layout, index, delta),
+      voices: track.voices?.map((voice) => ({ ...voice, bars: spliceVoice(voice.bars) })),
+    })),
+  }
 }
 export function capacity(score: Project, bar: number) {
   const [count, unit] = measureSettings(score, bar).meter

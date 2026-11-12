@@ -194,6 +194,70 @@ test('aligns the lowest number and duration underlines of stacked and single not
   await check('.preview-scroll .print-page')
 })
 
+test('keeps the common underline above extra lines and all low octave dots below them', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.layout.barsPerLine = 2
+  const track = project.tracks[0]
+  track.bars[0] = [
+    { ...blank(8), draft: false, dots: 1, notes: [{ midi: 48 }] },
+    { ...blank(16), draft: false, notes: [{ midi: 38 }, { midi: 50 }] },
+    { ...blank(8), draft: false, notes: [{ midi: 52 }] },
+    { ...blank(8), draft: false },
+  ]
+  track.bars[1] = [{ ...blank(4), draft: false, notes: [{ midi: 53 }] }]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'numbered-underline-order.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+
+  async function check(scope: string) {
+    const first = page.locator(scope + ' svg text[style*="dominant-baseline: middle"]').filter({ hasText: /^1$/ }).first()
+    await expect(first).toBeVisible()
+    const geometry = await first.evaluate((node) => {
+      const first = node as SVGTextElement
+      const svg = first.ownerSVGElement!
+      const baseline = Number(first.getAttribute('y'))
+      const digits = [...svg.querySelectorAll<SVGTextElement>('text[style*="dominant-baseline: middle"]')]
+        .filter((text) => Number(text.getAttribute('y')) === baseline)
+      const digit = (value: string) => digits.find((text) => text.textContent === value)!
+      const x = (text: SVGTextElement) => Number(text.getAttribute('x'))
+      const segments = [...svg.querySelectorAll('path')].flatMap((path) => {
+        const line = path.getAttribute('d')?.trim().match(/^M\s*([\d.]+),([\d.]+)\s+L\s*([\d.]+),([\d.]+)/)
+        if (!line) return []
+        const [, left, top, right, end] = line.map(Number)
+        return top === end && top > baseline && top < baseline + 25 ? [{ left, right, top }] : []
+      })
+      const lines = (text: SVGTextElement) => segments.filter(({ left, right }) => left - 1 <= x(text) && x(text) < right)
+        .map(({ top }) => top).sort((a, b) => a - b)
+      const dots = [...svg.querySelectorAll('g.at > text')].flatMap((text) => {
+        const transform = text.parentElement?.getAttribute('transform')?.match(/^translate\(([\d.]+) ([\d.]+)\)$/)
+        return text.textContent === '\uE1E7' && transform ? [{ x: Number(transform[1]), y: Number(transform[2]) }] : []
+      })
+      const dotsBelow = (text: SVGTextElement) => dots
+        .filter((dot) => Math.abs(dot.x - x(text) - text.getBBox().width / 2) < 2 && dot.y > baseline)
+        .map(({ y }) => y).sort((a, b) => a - b)
+      const shared = segments.find(({ left, right }) => left - 1 <= x(first) && x(first) < right)
+      return { first: lines(first), second: lines(digit('2')), third: lines(digit('3')),
+        joined: shared && segments.some(({ left, top }) => Math.abs(left - shared.right) < 1 && Math.abs(top - shared.top) < 0.01),
+        lowDots: [first, digit('2'), digit('3'), digit('4')].map(dotsBelow) }
+    })
+    expect(geometry.first).toHaveLength(1)
+    expect(geometry.second).toHaveLength(2)
+    expect(geometry.third).toHaveLength(1)
+    expect(geometry.joined).toBe(true)
+    expect(geometry.first[0]).toBeCloseTo(geometry.second[0], 2)
+    expect(geometry.first[0]).toBeCloseTo(geometry.third[0], 2)
+    for (const dots of geometry.lowDots) {
+      expect(dots[0]).toBeGreaterThan(geometry.second[1])
+      expect(dots[0]).toBeCloseTo(geometry.lowDots[0][0], 1)
+    }
+  }
+  await check('.canvas')
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  await check('.preview-scroll')
+})
+
 test('aligns each stack layer across measures with different octave dots and accidentals', async ({ page }) => {
   const project = createProject('song')
   project.tracks = project.tracks.slice(0, 1)
@@ -298,6 +362,61 @@ test('deletes selected stack layers and keeps the beat rhythm when the whole sta
   await expect(digits(0)).toHaveText(['1', '5'])
 })
 
+test('copies just the clicked chord layer with shortcuts, buttons, or the score menu', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  const track = project.tracks[0]
+  const bar = (pitches: number[][]) => pitches.map((notes) => ({
+    ...blank(), draft: false, notes: notes.map((midi) => ({ midi })),
+  }))
+  track.bars[0] = bar([[60, 64, 67], [62], [65], [69]])
+  track.bars[1] = bar([[71], [65], [69], [72]])
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'copy-stack-layer.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  const layer = page.locator('.canvas g[class^="xianpu-stack-note-"] > text').filter({ hasText: /^3$/ })
+  const destination = page.locator('.canvas svg text[style*="dominant-baseline: middle"]').filter({ hasText: /^4$/ }).last()
+  const copyName = '复制所选音符'
+  const pasteName = '粘贴音符'
+  async function clickGlyph(glyph: typeof layer, button: 'left' | 'right' = 'left') {
+    const box = (await glyph.boundingBox())!
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button })
+  }
+
+  await entry.getByRole('button', { name: /^第 1 小节，/ }).click()
+  await page.keyboard.press('Control+c')
+  await expect(page.getByRole('status')).toContainText('已复制 1 小节')
+
+  for (const action of ['keyboard', 'button', 'menu']) {
+    if (action === 'menu') {
+      await clickGlyph(layer, 'right')
+      const menu = page.getByRole('group', { name: '音符编辑' })
+      await menu.getByRole('button', { name: copyName }).click()
+      await clickGlyph(destination, 'right')
+      await menu.getByRole('button', { name: pasteName }).click()
+    } else {
+      await clickGlyph(layer)
+      await expect(page.getByText('所选音：E4 · 八度 0')).toBeVisible()
+      if (action === 'keyboard') await page.keyboard.press('Control+c')
+      else await entry.getByRole('button', { name: copyName }).click()
+      await clickGlyph(destination)
+      if (action === 'keyboard') await page.keyboard.press('Control+v')
+      else await entry.getByRole('button', { name: pasteName }).click()
+    }
+    await expect(page.getByRole('status')).toContainText('已粘贴 1 个音符位置')
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('xianpu.recovery.v1')!))
+    expect(saved.tracks[0].bars[0]).toEqual(track.bars[0])
+    const pasted = saved.tracks[0].bars[1]
+    expect(pasted).toHaveLength(4)
+    expect(pasted[1]).toMatchObject({ duration: 4, notes: [{ midi: 64 }] })
+    expect([pasted[0], ...pasted.slice(2)]).toEqual([track.bars[1][0], ...track.bars[1].slice(2)])
+    await page.keyboard.press('Control+z')
+    await expect(destination).toBeVisible()
+  }
+})
+
 test('drags notes, applies batch rhythm and pitch, and copies selected notes in score order', async ({ page }) => {
   const project = createProject('song')
   const staff = project.tracks[0]
@@ -380,6 +499,77 @@ test('keeps additional voices visible and individually editable when a staff swi
   expect(recovered.tracks[0].voices[0].bars[0][0].notes[0].midi).toBe(81)
   await page.getByRole('button', { name: '导出', exact: true }).click()
   await expect(page.locator('.print-page svg text').filter({ hasText: /^6$/ }).first()).toBeVisible()
+})
+
+test('copies a continuous note range with unfilled beats and an empty measure intact', async ({ page }) => {
+  const project = createProject('demo')
+  const track = project.tracks[0]
+  project.tracks = [track]
+  const note = (duration: 2 | 4 | 8, midi: number) => ({ ...blank(duration), draft: false, notes: [{ midi }] })
+  track.bars = [[note(8, 60), note(8, 62)], [], [note(2, 64), note(4, 65), note(4, 67)], ...project.measures.slice(3).map(() => [])]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'cross-bar-copy.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const glyph = (digit: number) => page.locator('.canvas svg text[style*="dominant-baseline: middle"]')
+    .filter({ hasText: new RegExp('^' + digit + '$') }).first()
+  await expect(glyph(1)).toBeVisible()
+  const first = (await glyph(1).boundingBox())!
+  const last = (await glyph(5).boundingBox())!
+  await page.mouse.click(first.x + first.width / 2, first.y + first.height / 2)
+  await page.keyboard.down('Shift')
+  await page.mouse.click(last.x + last.width / 2, last.y + last.height / 2)
+  await page.keyboard.up('Shift')
+  await expect(page.getByText('已选 5 个音符位置')).toBeVisible()
+  await page.keyboard.press('Control+c')
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  await entry.getByRole('button', { name: /^第 4 小节，/ }).click()
+  await page.keyboard.press('Control+v')
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('xianpu.recovery.v1')!))
+  expect(saved.tracks[0].bars.slice(3, 6).map((bar) => bar.map(({ notes, duration }) => [notes[0]?.midi ?? 0, duration])))
+    .toEqual([[[60, 8], [62, 8], [0, 4], [0, 4], [0, 4]], [[0, 4], [0, 4], [0, 4], [0, 4]], [[64, 2], [65, 4], [67, 4]]])
+  await expect(page.getByRole('status')).not.toContainText('超出拍数')
+})
+
+test('pastes a beamed eighth-note pair into the final quarter-note position as two notes', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.tracks[0].bars[0] = [60, 62].map((midi) => ({ ...blank(8), draft: false, notes: [{ midi }] }))
+  project.tracks[0].bars[1] = [64, 65, 67, 69].map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] }))
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'paste-beamed-pair.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  const beat = (n: number) => entry.getByRole('button', { name: '简谱位置 ' + n, exact: true })
+  await beat(1).click()
+  await beat(2).click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Control+c')
+  await entry.getByRole('button', { name: /^第 2 小节，/ }).click()
+  await beat(4).click()
+  await page.keyboard.press('Control+v')
+  await expect(beat(4)).toHaveText('4C')
+  await expect(beat(5)).toHaveText('5D')
+  await expect(beat(6)).toHaveCount(0)
+  await expect(page.locator('.canvas .score-note-highlight')).toHaveCount(1)
+  const second = page.locator('.canvas svg text[style*="dominant-baseline: middle"]').filter({ hasText: /^2$/ }).last()
+  const joined = () => second.evaluate((node) => {
+    const digit = node as SVGTextElement
+    const x = Number(digit.getAttribute('x'))
+    const y = Number(digit.getAttribute('y'))
+    const segments = [...digit.ownerSVGElement!.querySelectorAll('path')].flatMap((path) => {
+      const line = path.getAttribute('d')?.trim().match(/^M\s*([\d.]+),([\d.]+)\s+L\s*([\d.]+),([\d.]+)/)
+      if (!line) return []
+      const [, left, top, right, end] = line.map(Number)
+      return top === end && top > y && top < y + 25 ? [{ left, right, top }] : []
+    })
+    return segments.some((a) => a.left < x && Math.abs(a.right - x) < 1 &&
+      segments.some((b) => Math.abs(b.left - x) < 1 && b.right > x && b.top === a.top))
+  })
+  await expect.poll(joined).toBe(true)
+  await page.keyboard.press('Control+z')
+  await expect(beat(4)).toHaveText('4A')
+  await expect(beat(5)).toHaveCount(0)
 })
 
 test('uses the same measure boundaries across rows in numbered parts and the full score', async ({ page }) => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { blank, createProject, parseProject } from '../src/model.ts'
+import { beatList, blank, createProject, parseProject } from '../src/model.ts'
 import { copySelectedNotes, editRhythmSelection, pasteSelectedNotes, selectedBeats, shiftSelectedPitches, steppedRhythm } from '../src/noteSelection.ts'
 
 test('batch rhythm deduplicates chord notes and applies equally to explicit rests', () => {
@@ -41,7 +41,7 @@ test('note clipboard remaps complete spans and covers positions across a barline
   track.bars[0][0].spans = [{ id: 'hairpin', kind: 'crescendo', end: false }]
   track.bars[0][1].spans = [{ id: 'hairpin', kind: 'crescendo', end: true }]
   const first = { track: track.id, bar: 0, beat: 0 }
-  const clipboard = copySelectedNotes(selectedBeats(project, [first, { ...first, beat: 1 }]), track)
+  const clipboard = copySelectedNotes(project, selectedBeats(project, [first, { ...first, beat: 1 }]), track)
   const pasted = pasteSelectedNotes(project, { ...first, beat: 3 }, clipboard)
   assert.ok('score' in pasted)
   const bars = parseProject(JSON.stringify(pasted.score)).tracks[0].bars
@@ -51,4 +51,38 @@ test('note clipboard remaps complete spans and covers positions across a barline
   assert.equal(bars[0][3].spans?.[0].id, bars[1][0].spans?.[0].id)
   assert.equal(pasted.score.tracks[1], project.tracks[1])
   assert.deepEqual(pasteSelectedNotes(project, { ...first, bar: 3, beat: 3 }, clipboard), { error: 'space' })
+})
+
+test('pasting two eighth notes over the final quarter stays in that measure without adding a rest', () => {
+  const project = createProject('song')
+  const track = project.tracks[0]
+  track.bars[0] = [60, 62].map((midi) => ({ ...blank(8), draft: false, notes: [{ midi }] }))
+  track.bars[3] = [67, 69, 71, 72].map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] }))
+  const first = { track: track.id, bar: 0, beat: 0 }
+  const clip = copySelectedNotes(project, selectedBeats(project, [first, { ...first, beat: 1 }]), track)
+  const result = pasteSelectedNotes(project, { ...first, bar: 3, beat: 3 }, clip)
+  assert.ok('score' in result)
+  const bar = result.score.tracks[0].bars[3]
+  assert.deepEqual(beatList(result.score, bar, 3).map(({ notes, duration }) => [notes[0]?.midi, duration]),
+    [[67, 4], [69, 4], [71, 4], [60, 8], [62, 8]])
+  assert.deepEqual(result.positions.map(({ bar, beat }) => [bar, beat]), [[3, 3], [3, 4]])
+})
+
+test('pasting mixed note lengths advances by time even when a blank bar has unused slots', () => {
+  const project = createProject('song')
+  const track = project.tracks[0]
+  const note = (duration: 2 | 4 | 8, midi: number) => ({ ...blank(duration), draft: false, notes: [{ midi }] })
+  track.bars[0] = [note(2, 60), note(4, 62), note(4, 64)]
+  track.bars[1] = [note(8, 65), note(8, 67)]
+  const source = { track: track.id, bar: 0, beat: 0 }
+  const targets = selectedBeats(project, [source, { ...source, beat: 1 }, { ...source, beat: 2 },
+    { ...source, bar: 1 }, { ...source, bar: 1, beat: 1 }])
+  const clip = copySelectedNotes(project, targets, track)
+  const result = pasteSelectedNotes(project, { ...source, bar: 2 }, clip)
+  assert.ok('score' in result)
+  assert.deepEqual(result.positions.map(({ bar, beat }) => [bar, beat]), [[2, 0], [2, 1], [2, 2], [3, 0], [3, 1]])
+  assert.deepEqual(result.score.tracks[0].bars.slice(2).map((bar) => bar.map(({ notes, duration }) => [notes[0]?.midi, duration])),
+    [[[60, 2], [62, 4], [64, 4]], [[65, 8], [67, 8]]])
+  assert.deepEqual(pasteSelectedNotes(project, { ...source, bar: 2, beat: 3 }, clip), { error: 'barline' })
+  assert.deepEqual(track.bars[2], [])
 })

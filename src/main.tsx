@@ -17,8 +17,8 @@ import { SoundEditor } from './SoundEditor'
 import { NavigationEditor, navigationMessage } from './NavigationEditor'
 import { resolveScoreNavigation } from './scoreNavigation'
 import { paperDimensions, paperMargin } from './paper'
-import { beatList, beatRange, blank, changeBeat, clearMeasureContents, createProject, createTrack, defaultWatermarkStyle, extendNumberedBeat, keyNames, kinds, measureDifference, measureSettings, modes, paperFor, parseProject,
-  pitchNames, shiftedEndings, shiftedIntro, shiftedLayout, techniqueGroups, ticks, trackGapLimits, voiceBars, watermarkLimits, watermarkMaxLength,
+import { beatList, beatRange, blank, changeBeat, changeMeasures, clearMeasureContents, createProject, createTrack, defaultWatermarkStyle, extendNumberedBeat, keyNames, kinds, measureDifference, measureSettings, modes, paperFor, parseProject,
+  pitchNames, techniqueGroups, ticks, trackGapLimits, voiceBars, watermarkLimits, watermarkMaxLength,
   type Beat, type IntroRange, type Kind, type Layout, type Measure, type Mode, type Position, type Project, type ScoreLabelKind, type Track, type WatermarkStyle } from './model'
 import { playScore, stopPlayback } from './playback'
 import { copyMeasures, pasteMeasures, type MeasureClipboard, type PasteMode } from './measureClipboard'
@@ -46,6 +46,7 @@ const templates = [
 ] as const
 const creditFields = { subtitle: '副标题', lyricist: '作词', composer: '作曲', arranger: '编曲', engraver: '制谱' } as const
 const meters = [2, 4, 8, 16].flatMap((unit) => Array.from({ length: 12 }, (_, i) => (i + 1) + '/' + unit))
+const creatorPage = 'https://space.bilibili.com/40005809'
 const keyChangeErrors: Record<KeyChangeError, TextKey> = {
   'pitch-range': '移调后的音高超出可记谱范围。',
   'guitar-range': '按当前定弦，吉他无法演奏移调后的部分音符或和弦。',
@@ -61,32 +62,6 @@ function readRecovery() {
     const raw = localStorage.getItem(storage.recoveryKey)
     return raw ? parseProject(raw) : null
   } catch { return null }
-}
-function measuresChange(score: Project, index: number, insert: boolean): Project {
-  const delta = insert ? 1 : -1
-  const measures = shiftedEndings(score.measures, index, delta)
-  if (insert) measures.splice(index, 0, {})
-  else {
-    const simile = measures[index].simile
-    const other = simile === 'double' ? index + 1 : simile === 'double-second' ? index - 1 : -1
-    if (measures[other]) measures[other] = { ...measures[other], simile: undefined }
-    measures.splice(index, 1)
-  }
-  const splice = (original: Beat[][]) => {
-    const bars = original.slice()
-    if (insert) bars.splice(index, 0, [])
-    else {
-      const removed = new Set(bars[index].flatMap((beat) => beat.spans?.map(({ id }) => id) ?? []))
-      bars.splice(index, 1)
-      if (removed.size) return bars.map((bar) => bar.map((beat) => beat.spans?.some(({ id }) => removed.has(id))
-        ? { ...beat, spans: beat.spans.filter(({ id }) => !removed.has(id)) } : beat))
-    }
-    return bars
-  }
-  return { ...score, measures, intro: shiftedIntro(score.intro, index, delta), layout: shiftedLayout(score.layout, index, delta), tracks: score.tracks.map((track) => ({
-    ...track, bars: splice(track.bars), layout: shiftedLayout(track.layout, index, delta),
-    voices: track.voices?.map((voice) => ({ ...voice, bars: splice(voice.bars) })),
-  })) }
 }
 function updateTrack(score: Project, id: string, edit: (track: Track) => Track): Project {
   return { ...score, tracks: score.tracks.map((track) => track.id === id ? edit(track) : track) }
@@ -110,14 +85,18 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [saved, setSaved] = useState<Project | null>(null)
   const [path, setPath] = useState<string | null>(null)
   const [recovery, setRecovery] = useState(readRecovery)
+  const [recentProjects, setRecentProjects] = useState(storage.readRecentProjects)
+  const [verifiedRecentPaths, setVerifiedRecentPaths] = useState<Set<string>>()
   const [part, setPart] = useState<string | null>(null)
   const [selection, setSelection] = useState<Position & { editDraftRest?: boolean }>({ track: '', bar: 0, beat: 0 })
   const [selectedBars, setSelectedBars] = useState<number[]>([])
+  const [measureCountInput, setMeasureCountInput] = useState('1')
   const [selectedNotes, setSelectedNotes] = useState<Position[]>([])
   const [noteClipboard, setNoteClipboard] = useState<NoteClipboard | null>(null)
   const noteAnchor = useRef<Position | null>(null)
+  const noteRange = useRef<{ from: Position; to: Position } | null>(null)
   const rangeAnchor = useRef<number | null>(null)
-  const [barMenu, setBarMenu] = useState<{ x: number; y: number; position: Position; document: Document } | null>(null)
+  const [barMenu, setBarMenu] = useState<{ x: number; y: number; position: Position; document: Document; kind: 'measure' | 'note' } | null>(null)
   const [pasteStructure, setPasteStructure] = useState(false)
   const [pasteWarning, setPasteWarning] = useState<{ text: string; apply: () => void } | null>(null)
   const [notice, setNotice] = useState<Message | null>(null)
@@ -150,6 +129,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const afterRender = useRef<{ resolve: (pages: HTMLElement[]) => void; reject: (reason: Error) => void } | null>(null)
   const jobId = useRef(0)
   const dirty = !!project && saved !== project
+  const home = !project
+  const visibleRecentProjects = recentProjects.filter(({ path }) => verifiedRecentPaths?.has(path))
   const activePart = project?.tracks.some((track) => track.id === part) ? part : null
   useEffect(() => {
     if (audioState !== 'idle') {
@@ -175,7 +156,15 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   activeRef.current = { project, dirty, path, saved, busy }
   const commit = (edit: (score: Project) => Project) => dispatch({ type: 'edit', edit })
   const measureSelection = selectedBars.filter((index) => index < (project?.measures.length ?? 0))
+  const measureTotal = project?.measures.length ?? 0
+  const measureCount = Number(measureCountInput)
+  const validMeasureCount = Number.isInteger(measureCount) && measureCount > 0
+  const deleteStart = measureSelection[0] ?? barIndex
+  const canDeleteFromEnd = validMeasureCount && measureCount < measureTotal
+  const canDeleteFromSelection = canDeleteFromEnd && deleteStart + measureCount <= measureTotal
   const noteTargets = project ? selectedBeats(project, selectedNotes) : []
+  const copyTargets = !project || measureSelection.length ? [] : noteTargets.length ? noteTargets
+    : beat.draft ? [] : selectedBeats(project, [position])
   const measureDrag = useMeasureDrag(({ clientX, clientY }, doc) => measureButton(doc.elementFromPoint(clientX, clientY)), selectMeasureRange)
 
   function measureButton(element: Element | null) {
@@ -191,6 +180,44 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     } catch { setError(message('无法写入恢复草稿。请保存工程。')) }
   }, [project, dirty])
 
+  useEffect(() => {
+    if (storage.desktop) storage.saveRecentProjects(recentProjects)
+  }, [recentProjects])
+
+  useEffect(() => {
+    if (!home || !recentProjects.length) {
+      setVerifiedRecentPaths(undefined)
+      return
+    }
+    let disposed = false
+    let checking = false
+    async function refresh() {
+      if (checking) return
+      checking = true
+      try {
+        const paths = new Set(await storage.existingProjectPaths(recentProjects.map(({ path }) => path)))
+        if (disposed) return
+        setVerifiedRecentPaths(paths)
+        const existing = recentProjects.filter(({ path }) => paths.has(path))
+        if (existing.length !== recentProjects.length) {
+          setRecentProjects((current) => current === recentProjects ? existing : current)
+        }
+      } catch {
+        if (!disposed) setVerifiedRecentPaths(undefined)
+      } finally {
+        checking = false
+      }
+    }
+    void refresh()
+    window.addEventListener('focus', refresh)
+    const timer = window.setInterval(refresh, 5000)
+    return () => {
+      disposed = true
+      window.removeEventListener('focus', refresh)
+      window.clearInterval(timer)
+    }
+  }, [home, recentProjects])
+
   function load(score: Project | null, filename: string | null = null, clean = false) {
     openRequest.current++
     projectSession.current++
@@ -204,9 +231,13 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setPanel(null)
     setPart(null)
     setPath(filename)
+    if (filename && score) {
+      setRecentProjects((entries) => storage.rememberProject(entries, { path: filename, title: score.title }))
+    }
     setSaved(clean ? score : null)
     setSelection({ track: score?.tracks[0].id ?? '', bar: 0, beat: 0 })
     setSelectedBars([])
+    setMeasureCountInput('1')
     clearNoteSelection()
     rangeAnchor.current = null
     if (copied.current?.all) copied.current = null
@@ -231,6 +262,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         target = !saveAs && current.path ? current.path : await storage.savePath(current.project.title, t)
         if (!target) return false
         await storage.writeFile(target, data)
+        const entry = { path: target, title: current.project.title }
+        setRecentProjects((entries) => storage.rememberProject(entries, entry))
       } else storage.downloadProject(current.project.title, data, t)
       if (projectSession.current !== session) return true
       if (storage.desktop) setPath(target)
@@ -262,15 +295,24 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setConfirmation(null)
     action()
   }
-  async function openProject() {
+  async function openProject(recentPath?: string) {
     const request = ++openRequest.current
     if (!storage.desktop) { pickBrowserFile('.xianpu'); return }
     try {
-      const file = await storage.pickProject(t)
-      if (typeof file !== 'string') return
+      const file = recentPath ?? await storage.pickProject(t)
+      if (typeof file !== 'string' || openRequest.current !== request) return
       const score = parseProject(await storage.readFile(file))
       if (openRequest.current === request) whenClean(() => load(score, file, true))
     } catch (cause) {
+      if (recentPath && openRequest.current === request) {
+        const exists = await storage.existingProjectPaths([recentPath]).then((paths) => paths.includes(recentPath), () => undefined)
+        if (openRequest.current !== request) return
+        if (exists === false) {
+          setRecentProjects((entries) => entries.filter(({ path }) => path !== recentPath))
+          setError(message('工程文件已移动或删除。'))
+          return
+        }
+      }
       if (openRequest.current === request) setError(message('打开失败。', undefined, cause))
     }
   }
@@ -378,10 +420,10 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       if (key === 'c' || key === 'v') {
         event.preventDefault()
         if (key === 'c') {
-          if (noteTargets.length) copyNotes()
-          else copySelection()
-        } else if (noteClipboard && !measureSelection.length) pasteNotes()
-        else pasteSelection(measureSelection.length > 1 ? 'selection' : 'overwrite', measureSelection[0] ?? barIndex)
+          if (measureSelection.length) copySelection()
+          else copyNotes()
+        } else if (noteClipboard) pasteNotes()
+        else if (measureSelection.length && copied.current) pasteSelection(measureSelection.length > 1 ? 'selection' : 'overwrite', measureSelection[0])
       }
     }
     return listenWorkspaceKeys(shortcuts)
@@ -439,9 +481,20 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setBarMenu(null)
     setSelection({ ...target, editDraftRest })
   }
+  function editMeasureCount(index: number, delta: number) {
+    if (!project) return
+    const next = changeMeasures(project, index, delta)
+    if (next === project) return
+    commit(() => next)
+    if (delta < 0 && barIndex < index) selectBeat(position, selection.editDraftRest)
+    else selectBeat({ ...position, bar: Math.min(index, next.measures.length - 1), beat: 0, note: undefined, string: undefined })
+    setError(null)
+    setNotice(message(delta > 0 ? '已插入 {count} 小节。' : '已删除 {count} 小节。', { count: Math.abs(delta) }))
+  }
   function clearNoteSelection() {
     setSelectedNotes([])
     noteAnchor.current = null
+    noteRange.current = null
   }
   function deleteNotes() {
     if (!project) return
@@ -463,6 +516,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     rangeAnchor.current = null
     setBarMenu(null)
     noteAnchor.current = from
+    noteRange.current = { from, to }
     setSelectedNotes(beatRange(project, item, from, to).flatMap(({ position, beat }) =>
       !project.measures[position.bar].simile && (!beat.draft || sameBeat(position, from) || sameBeat(position, to))
         ? [{ ...position, lane: from.lane, note: sameBeat(from, to) ? to.note : undefined }] : []))
@@ -490,6 +544,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setBarMenu(null)
     setSelectedNotes(next)
     noteAnchor.current = target
+    noteRange.current = null
     setSelection({ ...(next.at(-1) ?? target), editDraftRest: true })
   }
   function selectMeasure(target: Position, event: MouseEvent) {
@@ -554,14 +609,20 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       bars: remove(track.bars), voices: track.voices?.map((voice) => ({ ...voice, bars: remove(voice.bars) })),
     })))
   }
-  function showBarMenu(target: Position, event: MouseEvent) {
+  function showClipboardMenu(target: Position, event: MouseEvent, kind: 'measure' | 'note') {
     event.preventDefault()
-    if (!measureSelection.includes(target.bar) || target.track !== position.track || (target.voice ?? 0) !== activeVoice) selectMeasure(target, event)
+    if (kind === 'note') {
+      if (!noteTargets.some(({ position, notes }) => sameBeat(position, target) && (!notes || target.note !== undefined && notes.has(target.note)))) {
+        selectBeat(target, true)
+      }
+    } else if (!measureSelection.includes(target.bar) || !sameVoice(target, position)) {
+      selectMeasure(target, event)
+    }
     setPasteStructure(false)
     const doc = event.currentTarget.ownerDocument
     const view = doc.defaultView ?? window
     setBarMenu({ x: Math.max(0, Math.min(event.clientX, view.innerWidth - 265)),
-      y: Math.max(0, Math.min(event.clientY, view.innerHeight - 310)), position: target, document: doc })
+      y: Math.max(0, Math.min(event.clientY, view.innerHeight - (kind === 'note' ? 90 : 310))), position: target, document: doc, kind })
   }
   function copySelection(all = false) {
     if (!project || !track) return
@@ -573,29 +634,47 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setBarMenu(null)
   }
   function copyNotes() {
-    if (!project || !track || !noteTargets.length) return
-    const source = project.tracks.find(({ id }) => id === noteTargets[0].position.track)!
-    if (noteTargets.some(({ position }) => !sameVoice(position, noteTargets[0].position))) {
+    if (!project || !copyTargets.length) return
+    const source = project.tracks.find(({ id }) => id === copyTargets[0].position.track)!
+    if (copyTargets.some(({ position }) => !sameVoice(position, copyTargets[0].position))) {
       setError(message('请在同一分谱的同一声部选择要复制的音符。'))
       return
     }
-    const clipboard = copySelectedNotes(noteTargets, source)
+    let targets = copyTargets
+    const range = noteRange.current
+    if (range && !sameBeat(range.from, range.to)) {
+      const first = Math.min(range.from.bar, range.to.bar)
+      const last = Math.max(range.from.bar, range.to.bar)
+      if (project.measures.slice(first, last + 1).some(({ simile }) => simile)) {
+        setError(message('音符选区包含小节重复记号，请改用小节复制。'))
+        return
+      }
+      // A continuous selection includes the time occupied by unfilled beats.
+      targets = beatRange(project, source, range.from, range.to).map((entry) => ({ ...entry, notes: null }))
+    }
+    const clipboard = copySelectedNotes(project, targets, source)
+    copied.current = null
     setNoteClipboard(clipboard)
+    setBarMenu(null)
     setError(null)
-    setNotice(message('已复制 {count} 个音符位置。', { count: clipboard.beats.length }))
+    setNotice(message('已复制 {count} 个音符位置。', { count: copyTargets.length }))
   }
-  function pasteNotes() {
+  function pasteNotes(target = position) {
     if (!project || !noteClipboard) return
-    const result = pasteSelectedNotes(project, position, noteClipboard)
+    setBarMenu(null)
+    const result = pasteSelectedNotes(project, target, noteClipboard)
     if ('error' in result) {
-      setError(message(result.error === 'guitar' ? '当前定弦无法弹出这个音。' : '目标位置后的可用拍位不足，无法粘贴。'))
+      setError(message(result.error === 'guitar' ? '当前定弦无法弹出这个音。' : result.error === 'barline'
+        ? '粘贴的音符会跨过小节线，请换一个起始拍位。' : '目标位置后的可用拍位不足，无法粘贴。'))
       return
     }
     commit(() => result.score)
     setSelectedBars([])
     rangeAnchor.current = null
+    setSelection({ ...result.positions[0], editDraftRest: true })
     setSelectedNotes(result.positions)
     noteAnchor.current = result.positions[0]
+    noteRange.current = null
     setError(null)
     reportNoteOverflow(result.score, result.positions, message('已粘贴 {count} 个音符位置。', { count: result.positions.length }))
   }
@@ -870,16 +949,18 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
 
   const visible = project?.tracks.filter((item) => !activePart || item.id === activePart) ?? []
   const pendingPart = panel === 'remove-part' ? project?.tracks.find((item) => item.id === partToRemove) : undefined
+  function openCreatorPage(event: MouseEvent<HTMLAnchorElement>) {
+    if (!storage.desktop) return
+    event.preventDefault()
+    void storage.openCreatorPage().catch(() => setError(message('无法打开 B 站主页。')))
+  }
+
   return <>
     <input ref={fileInput} type="file" accept=".xianpu" hidden onChange={fromBrowser} />
     <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="https://space.bilibili.com/40005809" target="_blank" rel="noopener noreferrer"
-          aria-label={t('{name} · 打开 B 站主页', { name: t(appName) })} onClick={(event) => {
-            if (!storage.desktop) return
-            event.preventDefault()
-            void storage.openCreatorPage().catch(() => setError(message('无法打开 B 站主页。')))
-          }}>
+        <a className="brand" href={creatorPage} target="_blank" rel="noopener noreferrer"
+          aria-label={t('{name} · 打开 B 站主页', { name: t(appName) })} onClick={openCreatorPage}>
           <span className="brand-icon" aria-hidden="true">♬</span>
           <span><strong>{t(appName)}</strong>{language === 'zh' && <small>{translate('en', appName).toUpperCase()}</small>}</span>
         </a>
@@ -897,7 +978,10 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         </select>{project ? <>
           <button className="quiet" aria-busy={audioState === 'loading'} onClick={() => void togglePlay()}>{audioState !== 'idle' ? '■ ' + t('停止') : '▶ ' + t('试听')}</button>
           <button className="primary" onClick={showExport}>{t('导出')}</button>
-        </> : <span className="tag">{t('离线写谱工作台')}</span>}</div>
+        </> : <span className="tag">{t('离线写谱工作台')}</span>}
+          <a className="contact-link quiet" href={creatorPage} target="_blank" rel="noopener noreferrer"
+            onClick={openCreatorPage}>{t('联系我们')}</a>
+        </div>
       </header>
       {!project ? <main className="home">
         <div className="home-copy"><span className="eyebrow">{t('你的本地乐谱工作台')}</span><h1>{t('从第一小节开始')}</h1>
@@ -905,6 +989,14 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         {recovery && <div className="recover"><div><strong>{t('发现未保存的草稿')}</strong><p>{recovery.title}</p></div>
           <button className="primary" onClick={() => { load(recovery); setRecovery(null) }}>{t('恢复草稿')}</button>
           <button onClick={() => discard(() => {})}>{t('丢弃草稿')}</button></div>}
+        {storage.desktop && <section className="recent-projects" aria-labelledby="recent-projects-title">
+          <h2 id="recent-projects-title">{t('最近工程')}</h2>
+          {visibleRecentProjects.length > 0 ? <ul>{visibleRecentProjects.map(({ path, title }) =>
+            <li key={path}><button disabled={!!recovery} title={path} onClick={() => void openProject(path)}>
+              <strong>{title || path.split(/[\\/]/).at(-1)}</strong><small>{path}</small>
+            </button></li>,
+          )}</ul> : <p>{t('打开或保存工程后会显示在这里。')}</p>}
+        </section>}
         <div className="templates">{templates.map((template) => <button key={template.id} className="template" disabled={!!recovery} onClick={() => startProject(template.id)}>
           <span className="notation">{template.notation}</span><strong>{t(template.title)}</strong><span>{t(template.description)}</span><span className="template-action">{t('新建乐谱')} ↗</span>
         </button>)}</div>
@@ -960,7 +1052,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           <div className="paper-scroll"><div className="paper" style={{ width: page.width * zoom / 100 + 'mm', paddingInline: paperMargin * zoom / 100 + 'mm' }}>
             <ScoreView key={projectSession.current} project={project} part={activePart} position={position} playhead={audioState === 'playing' ? playhead : null} selectedBars={measureSelection} selectedNotes={selectedNotes} scale={zoom / 100} onSelect={(target) => selectBeat(target, true)}
               onNoteSelect={selectNote} onNoteRange={selectNoteRange}
-              onLabelSelect={openScoreLabel} onBarSelect={selectMeasure} onBarRange={selectMeasureRange} onBarMenu={showBarMenu} onError={(cause) => setError(message('谱面绘制失败。', undefined, cause))} />
+              onLabelSelect={openScoreLabel} onBarSelect={selectMeasure} onBarRange={selectMeasureRange} onClipboardMenu={showClipboardMenu} onError={(cause) => setError(message('谱面绘制失败。', undefined, cause))} />
           </div></div>
           <section className="position-panel" aria-label={t('小节与录入位置')}>
             <PanelsSuspended.Provider value={!!(panel || scoreLabel || confirm || pasteWarning || busy)}>
@@ -976,13 +1068,29 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                     </select></label>}
                   </div>
                   <div className="tool-actions" role="group" aria-label={t('小节编辑')}>
-                    <button disabled={project.measures.length >= 256 || project.measures[barIndex].simile === 'double'}
-                      title={project.measures[barIndex].simile === 'double' ? t('不能拆开两小节重复。') : undefined} onClick={() => {
-                      commit((score) => measuresChange(score, barIndex + 1, true)); selectBeat({ ...position, bar: barIndex + 1, beat: 0 })
-                    }}>{t('插入小节')}</button>
-                    <button title="Ctrl+C" onClick={() => copySelection()}>{t('复制小节')}</button>
-                    <button title="Ctrl+V" onClick={() => pasteSelection(measureSelection.length > 1 ? 'selection' : 'overwrite', measureSelection[0] ?? barIndex)}>{t('粘贴小节')}</button>
-                    <button disabled={!copied.current} onClick={() => pasteSelection('before')}>{t('在前面插入粘贴')}</button>
+                    {measureSelection.length
+                      ? <button title="Ctrl+C" onClick={() => copySelection()}>{t('复制小节')}</button>
+                      : <button title="Ctrl+C" disabled={!copyTargets.length} onClick={copyNotes}>{t('复制所选音符')}</button>}
+                    {measureSelection.length && !noteClipboard ? <>
+                      <button title="Ctrl+V" disabled={!copied.current} onClick={() => pasteSelection(measureSelection.length > 1 ? 'selection' : 'overwrite', measureSelection[0])}>{t('粘贴小节')}</button>
+                      <button disabled={!copied.current} onClick={() => pasteSelection('before')}>{t('在前面插入粘贴')}</button>
+                    </> : <>
+                      <button title="Ctrl+V" disabled={!noteClipboard} onClick={() => pasteNotes()}>{t('粘贴音符')}</button>
+                    </>}
+                  </div>
+                </div>
+                <div className="position-header measure-operations">
+                  <label>{t('小节数量')}<input type="number" min="1" max="256" step="1" value={measureCountInput}
+                    onChange={(event) => setMeasureCountInput(event.target.value)} /></label>
+                  <button disabled={!validMeasureCount || measureTotal + measureCount > 256 || project.measures[barIndex + 1]?.simile === 'double-second'}
+                    title={t(project.measures[barIndex + 1]?.simile === 'double-second' ? '不能拆开两小节重复。'
+                      : measureTotal + measureCount > 256 ? '插入后会超过 256 小节。' : '在当前小节后插入')}
+                    onClick={() => editMeasureCount(barIndex + 1, measureCount)}>{t('插入小节')}</button>
+                  <div className="tool-actions tool-actions-danger" role="group" aria-label={t('移除操作')}>
+                    <button disabled={!canDeleteFromSelection} title={t('从第 {bar} 小节起删除', { bar: deleteStart + 1 })}
+                      onClick={() => editMeasureCount(deleteStart, -measureCount)}>{t('从选中处删除小节')}</button>
+                    <button disabled={!canDeleteFromEnd}
+                      onClick={() => editMeasureCount(measureTotal - measureCount, -measureCount)}>{t('从曲尾删除小节')}</button>
                   </div>
                 </div>
                 <div className="position-header measure-structure">
@@ -1002,19 +1110,13 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                       aria-pressed={measureSelection.includes(index)} data-current={index === barIndex} title={hint}
                       onClick={(event) => {
                         if (!event.detail || event.shiftKey || event.ctrlKey || event.metaKey) selectMeasure({ ...position, bar: index }, event)
-                      }} onContextMenu={(event) => showBarMenu({ ...position, bar: index }, event)}>
+                      }} onContextMenu={(event) => showClipboardMenu({ ...position, bar: index }, event, 'measure')}>
                       {index + 1}<span aria-label={hint} className={difference < 0 ? 'over' : difference > 0 ? 'under' : 'full'}>●</span>
                     </button>
                   })}
                 </div>
                 {measureSelection.length > 0 && <small>{t('{track} · 所选小节 {bars}', { track: track!.name, bars: measureSelection.map((index) => index + 1).join(', ') })}</small>}
-                {(noteTargets.length > 0 || noteClipboard) && <div className="tool-actions" role="group" aria-label={t('音符编辑')}>
-                  {noteTargets.length > 0 && <>
-                    <small>{t('已选 {count} 个音符位置', { count: noteTargets.length })}</small>
-                    <button title="Ctrl+C" onClick={copyNotes}>{t('复制所选音符')}</button>
-                  </>}
-                  {noteClipboard && <button title="Ctrl+V" onClick={pasteNotes}>{t('粘贴音符')}</button>}
-                </div>}
+                {noteTargets.length > 0 && <small>{t('已选 {count} 个音符位置', { count: noteTargets.length })}</small>}
                 {track && measureDifference(project, track, barIndex, activeVoice) !== 0 && <p className={'measure-status ' + (measureDifference(project, track, barIndex, activeVoice) < 0 ? 'over' : 'under')}>
                   {t('{track}第 {bar} 小节{status}', { track: track.name, bar: barIndex + 1,
                     status: t(measureDifference(project, track, barIndex, activeVoice) > 0 ? '还差 {beats} 拍' : '超出 {beats} 拍',
@@ -1033,11 +1135,6 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                     <small>{index + 1}</small><span>{value.draft ? '·' : value.notes.length ? value.notes.map((note) => note.string ? note.fret : pitchNames[note.midi % 12]).join('·') : t('休')}</span>
                   </button>)}
                 </div></div>)}
-                <div className="tool-actions tool-actions-danger" role="group" aria-label={t('移除操作')}>
-                  <button disabled={project.measures.length <= 1} onClick={() => {
-                    commit((score) => measuresChange(score, barIndex, false)); selectBeat({ ...position, bar: Math.min(barIndex, project.measures.length - 2), beat: 0 })
-                  }}>{t('删除小节')}</button>
-                </div>
               </ToolPanel>
             </PanelsSuspended.Provider>
           </section>
@@ -1064,7 +1161,11 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       {error && panel !== 'export' && <div role="alert" className="toast"><span>{displayMessage(t, error)}</span><button aria-label={t('关闭提示')} onClick={() => setError(null)}>×</button></div>}
     </div>
     {barMenu && createPortal(<div className="bar-menu-layer" onPointerDown={() => setBarMenu(null)} onKeyDown={(event) => { if (event.key === 'Escape') setBarMenu(null) }}>
-      <div className="bar-menu" role="group" aria-label={t('小节操作')} style={{ left: barMenu.x, top: barMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
+      <div className="bar-menu" role="group" aria-label={t(barMenu.kind === 'note' ? '音符编辑' : '小节操作')} style={{ left: barMenu.x, top: barMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
+        {barMenu.kind === 'note' ? <>
+          <button autoFocus disabled={!copyTargets.length} onClick={copyNotes}>{t('复制所选音符')}</button>
+          <button disabled={!noteClipboard} onClick={() => pasteNotes(barMenu.position)}>{t('粘贴音符')}</button>
+        </> : <>
         <button autoFocus onClick={() => copySelection()}>{t('复制小节')}</button>
         {!activePart && <button onClick={() => copySelection(true)}>{t('复制整段总谱')}</button>}
         <button disabled={!copied.current || measureSelection.length < 2} onClick={() => pasteSelection('selection', barMenu.position.bar, pasteStructure)}>{t('覆盖所选小节')}</button>
@@ -1072,6 +1173,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         <button disabled={!copied.current} onClick={() => pasteSelection('before', barMenu.position.bar, pasteStructure)}>{t('在前面插入粘贴')}</button>
         <button disabled={!copied.current} onClick={() => pasteSelection('after', barMenu.position.bar, pasteStructure)}>{t('在后面插入粘贴')}</button>
         {copied.current?.all && !activePart && <label className="checkbox"><input type="checkbox" checked={pasteStructure} onChange={(event) => setPasteStructure(event.target.checked)} />{t('包含结构记号')}</label>}
+        </>}
       </div>
     </div>, barMenu.document.body)}
     {pendingPart && <Modal title={t('删除分谱')} close={() => { setPanel(null); setPartToRemove(null) }}>

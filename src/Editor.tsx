@@ -180,6 +180,24 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
     return listenWorkspaceKeys(keyDown)
   })
   const notation = t(percussion ? '打击乐谱' : tab ? '吉他六线谱' : staff ? '五线谱' : '简谱')
+  const graceControls = !percussion && <>
+    <div className="field-row">
+      <label>{t('倚音音高')}<select value={gracePitch ?? Math.min(127, (current?.midi ?? 60) + 2)}
+        onChange={(event) => setGracePitch(Number(event.target.value))}>
+        {Array.from({ length: 128 }, (_, midi) => <option value={midi} key={midi}>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</option>)}
+      </select></label>
+      <button disabled={!current || (beat.grace?.length ?? 0) >= 4} onClick={() => {
+        const pitch = gracePitch ?? Math.min(127, (current?.midi ?? 60) + 2)
+        if (guitar && !track.tuning.some((open) => pitch >= open && pitch - open <= 36)) { setError('当前定弦无法弹出这个音。'); return }
+        setError('')
+        edit((old) => ({ ...old, grace: [...old.grace ?? [], pitch] }))
+      }}>{t('添加前倚音')}</button>
+    </div>
+    {beat.grace?.map((midi, index) => <div className="inline small-gap" key={index}>
+      <span>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</span>
+      <button className="danger-action" onClick={() => edit((old) => ({ ...old, grace: old.grace?.filter((_, i) => i !== index) }))}>{t('移除倚音')}</button>
+    </div>)}
+  </>
   return <section className="inspector editor" hidden={suspended} aria-label={t('录入面板')}>
     <div className="inspector-head">
       <span className="eyebrow">{t('当前录入')}</span>
@@ -294,22 +312,7 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
       }}>{t('应用和弦图')}</button></>}
       </ToolPanel>
       <ToolPanel label={t('倚音与成组连音')}>
-        {!percussion && <div className="field-row">
-          <label>{t('倚音音高')}<select value={gracePitch ?? Math.min(127, (current?.midi ?? 60) + 2)}
-            onChange={(event) => setGracePitch(Number(event.target.value))}>
-            {Array.from({ length: 128 }, (_, midi) => <option value={midi} key={midi}>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</option>)}
-          </select></label>
-          <button disabled={!current || (beat.grace?.length ?? 0) >= 4} onClick={() => {
-            const pitch = gracePitch ?? Math.min(127, (current?.midi ?? 60) + 2)
-            if (guitar && !track.tuning.some((open) => pitch >= open && pitch - open <= 36)) { setError('当前定弦无法弹出这个音。'); return }
-            setError('')
-            edit((old) => ({ ...old, grace: [...old.grace ?? [], pitch] }))
-          }}>{t('添加前倚音')}</button>
-        </div>}
-        {beat.grace?.map((midi, index) => <div className="inline small-gap" key={index}>
-          <span>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</span>
-          <button className="danger-action" onClick={() => edit((old) => ({ ...old, grace: old.grace?.filter((_, i) => i !== index) }))}>{t('移除倚音')}</button>
-        </div>)}
+        {graceControls}
         <div className="field-row">
           <label>{t('连音个数')}<select value={ratio[0]} onChange={(event) => setRatio([Number(event.target.value), ratio[1]])}>
             {[2, 3, 4, 5, 6, 7, 8, 9].map((value) => <option key={value}>{value}</option>)}
@@ -332,7 +335,7 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
           }}>{t('清除这组连音')}</button>
         </div>}
       </ToolPanel>
-      <NotationEditor beat={beat} position={position} measures={score.measures} technique={track.technique ?? (track.kind === 'guitar' ? '吉他' : undefined)} guitarString={guitar ? current?.string : undefined} edit={edit} putSpan={putSpan} removeSpan={removeSpan} />
+      <NotationEditor beat={beat} position={position} measures={score.measures} technique={track.technique ?? (track.kind === 'guitar' ? '吉他' : undefined)} guitarString={guitar ? current?.string : undefined} graceControls={graceControls} edit={edit} putSpan={putSpan} removeSpan={removeSpan} />
       {error && <p className="inline-error" role="alert">{t(error)}</p>}
     </div>
   </section>

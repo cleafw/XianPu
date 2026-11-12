@@ -1,5 +1,18 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test('offers Contact us on the home screen and in the score editor', async ({ page, context }) => {
+  const profile = 'https://space.bilibili.com/40005809'
+  await context.route(profile, (route) => route.fulfill({ body: 'Bilibili profile' }))
+  await page.goto('/')
+  const contact = page.getByRole('link', { name: '联系我们', exact: true })
+  await expect(contact).toBeVisible()
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await expect(contact).toHaveAttribute('href', profile)
+  const popup = page.waitForEvent('popup')
+  await contact.click()
+  await expect(await popup).toHaveURL(profile)
+})
+
 async function clickRenderedStaff(page: Page, staffLine: number, beatIndex: number) {
   const svg = page.locator('.canvas svg').filter({ has: page.locator('rect') }).first()
   const click = await svg.evaluate((system, { staffLine, beatIndex }) => {

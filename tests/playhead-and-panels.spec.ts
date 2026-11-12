@@ -170,7 +170,9 @@ test('moves the entry position into a separate document and keeps the score and 
   // The browser test has no native host to apply the requested window size.
   await popup.setViewportSize({ width: 620, height: 450 })
   const entry = popup.getByRole('region', { name: '录入位置', exact: true })
-  await expect(entry.getByRole('group', { name: '移除操作' }).getByRole('button', { name: '删除小节' })).toBeVisible()
+  const removal = entry.getByRole('group', { name: '移除操作' })
+  await expect(removal.getByRole('button', { name: '从选中处删除小节' })).toBeVisible()
+  await expect(removal.getByRole('button', { name: '从曲尾删除小节' })).toBeVisible()
   const second = entry.getByRole('button', { name: /^第 2 小节，/ })
   const fourth = entry.getByRole('button', { name: /^第 4 小节，/ })
   const start = (await second.boundingBox())!

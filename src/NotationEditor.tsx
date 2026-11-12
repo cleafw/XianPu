@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useLanguage } from './i18n'
 import { ToolPanel } from './ToolPanel'
-import { markSymbol } from './markGlyphs'
-import { defaultMarkPlace, markHasPlayback, spanHasPlayback, spanKinds, spanLabels, symbols, type ScoreMark, type SpanEnd, type SymbolCode } from './notationMarks'
+import { markSymbol, type MarkSymbol } from './markGlyphs'
+import { defaultMarkPlace, markHasPlayback, spanHasPlayback, spanKinds, spanLabels, symbolAliases, symbols, type ScoreMark, type SpanEnd, type SymbolCode } from './notationMarks'
 import { techniqueGroups, type Beat, type Measure, type Position, type Track } from './model'
 
 const views = [['grid', '图标网格', '▦'], ['list', '记号列表', '☰'], ['select', '下拉选择', '▾']] as const
@@ -10,27 +10,33 @@ type MarkView = typeof views[number][0]
 const spanSymbols: Record<SpanEnd['kind'], string> = {
   slur: '⌒', crescendo: '＜', diminuendo: '＞', roll: '∿', custom: '┄', flutter: '★∿',
   palmMute: 'P.M.', ottavaUp: '8va', ottavaDown: '8vb', pedal: 'Ped.', lyricExtend: '⎯',
+  trillLine: 'tr∿', glissandoLine: '∿', letRingLine: 'l.r.', pipaLongRoll: '*—',
 }
 
 function MarkPalette<T extends string>({ items, view, label, name, symbol, pick, disabled }: {
   items: readonly T[]; view: 'grid' | 'list'; label: string; name: (item: T) => string;
-  symbol: (item: T) => string | number; pick: (item: T) => void; disabled?: boolean
+  symbol: (item: T) => MarkSymbol; pick: (item: T) => void; disabled?: boolean
 }) {
   return <div className={'mark-palette mark-palette-' + view} role="group" aria-label={label}>
     {items.map((item) => {
       const glyph = symbol(item)
       const music = typeof glyph === 'number'
       return <button key={item} type="button" aria-label={name(item)} title={name(item)} disabled={disabled} onClick={() => pick(item)}>
-        <span className={'mark-preview' + (music ? ' mark-preview-music' : '')} aria-hidden="true">{music ? String.fromCodePoint(glyph) : glyph}</span>
+        <span className={'mark-preview' + (music ? ' mark-preview-music' : '')} aria-hidden="true">
+          {typeof glyph === 'object' ? <svg width="22" height="22" viewBox="-9 -9 18 18">
+            <path d={glyph.path} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg> : music ? String.fromCodePoint(glyph) : glyph}
+        </span>
         {view === 'list' && <span>{name(item)}</span>}
       </button>
     })}
   </div>
 }
 
-export function NotationEditor({ beat, position, measures, technique, guitarString, edit, putSpan, removeSpan }: {
+export function NotationEditor({ beat, position, measures, technique, guitarString, graceControls, edit, putSpan, removeSpan }: {
   beat: Beat; position: Position; measures: Measure[]; technique?: Track['technique']; guitarString?: number; edit: (fn: (old: Beat) => Beat) => void
   putSpan: (start: Position, end: Position, span: SpanEnd) => boolean; removeSpan: (id: string) => void
+  graceControls?: ReactNode
 }) {
   const { language, t } = useLanguage()
   const lang = language === 'zh' ? 0 : 1
@@ -49,7 +55,8 @@ export function NotationEditor({ beat, position, measures, technique, guitarStri
   useEffect(() => { setStart(null); setInvalidEnd(false) }, [measures])
   const items = (Object.keys(symbols) as SymbolCode[]).filter((key) => {
     const row = symbols[key]
-    return (!category || row[0] === category) && [key, ...row].some((term) => term.toLowerCase().includes(search.trim().toLowerCase()))
+    return (!category || row[0] === category) && [key, ...row, symbolAliases[key] ?? '']
+      .some((term) => term.toLowerCase().includes(search.trim().toLowerCase()))
   })
   const showCustom = !category && (!search || '自定义文字符号 custom text symbol'.includes(search.trim().toLowerCase()))
   const selected = code !== 'text' && items.includes(code) ? code : items[0] ?? (showCustom ? 'text' : '')
@@ -104,6 +111,10 @@ export function NotationEditor({ beat, position, measures, technique, guitarStri
       {showCustom && effective !== 'text' && <button type="button" onClick={() => setCode('text')}>{name('text')}</button>}
     </>}
     {effective === 'text' && <label>{name('text')}<input maxLength={120} value={text} onChange={(event) => setText(event.target.value)} /></label>}
+    {effective === 'grace' && graceControls && <details>
+      <summary>{t('录入小音符（倚音）')}</summary>
+      {graceControls}
+    </details>}
     {(view === 'select' || effective === 'text') && <button disabled={!effective || effective === 'text' && !text.trim() || full}
       onClick={() => { if (effective) addMark(effective) }}>{t('添加记号')}</button>}
     {beat.marks?.map((mark) => <div className="notation-mark-item" key={mark.id}>

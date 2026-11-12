@@ -36,6 +36,15 @@ fn fit_tool_panel(window: WebviewWindow, label: String, height: u32, title: Stri
 }
 
 #[tauri::command]
+async fn existing_project_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths.into_iter().take(10)
+            .filter(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()))
+            .collect()
+    }).await.map_err(io_error)
+}
+
+#[tauri::command]
 fn read_project(path: PathBuf) -> Result<String, String> {
     let file = std::fs::File::open(path).map_err(io_error)?;
     if file.metadata().map_err(io_error)?.len() > MAX_PROJECT_BYTES as u64 {
@@ -209,7 +218,7 @@ fn main() {
                 .build()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![read_project, read_midi, write_project, export_pdf, write_png, system_language, open_creator_page, fit_tool_panel])
+        .invoke_handler(tauri::generate_handler![existing_project_paths, read_project, read_midi, write_project, export_pdf, write_png, system_language, open_creator_page, fit_tool_panel])
         .run(tauri::generate_context!())
         .expect("could not start Leaf Notation");
 }
