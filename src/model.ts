@@ -21,9 +21,12 @@ export type Measure = NavigationMeasure & {
   simile?: 'single' | 'double' | 'double-second'
 }
 export type Tone = { midi: number; string?: number; fret?: number; slide?: boolean; bend?: boolean }
+export type GraceSide = 'grace' | 'graceAfter'
+export const graceLineCounts = [1, 2, 3, 4] as const
 export type Beat = {
   duration: Duration; dots: 0 | 1 | 2; triplet: boolean; notes: Tone[];
-  tuplet?: [number, number]; tupletGroup?: string; grace?: number[];
+  tuplet?: [number, number]; tupletGroup?: string; grace?: number[]; graceAfter?: number[];
+  graceLines?: Partial<Record<GraceSide, number>>
   marks?: ScoreMark[]; spans?: SpanEnd[]; verses?: string[];
   draft?: boolean; lyric?: string; chord?: string; diagram?: number[]; tie?: boolean; slur?: boolean
 }
@@ -52,6 +55,7 @@ export const modes = { numbered: '简谱', tab: '吉他六线谱', staff: '五�
 export const kinds = { voice: modes.numbered, guitar: modes.tab, instrument: modes.staff } as const
 export const guitarTuning = [64, 59, 55, 50, 45, 40]
 export const durations: Duration[] = [1, 2, 4, 8, 16, 32, 64]
+export const maxGraceNotes = 4
 export const keyNames = ['C♭', 'G♭', 'D♭', 'A♭', 'E♭', 'B♭', 'F', 'C', 'G', 'D', 'A', 'E', 'B', 'F♯', 'C♯']
 export const pitchNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B']
 const intervals = [0, 2, 4, 5, 7, 9, 11]
@@ -194,6 +198,14 @@ export function staffAccidental(letter: string, key: number) {
 }
 export function midiForDegree(degree: number, key: number, octave: number, accidental: number) {
   return Math.max(0, Math.min(127, tonic(key) + intervals[degree - 1] + octave * 12 + accidental))
+}
+export function numberedPitch(midi: number, key: number) {
+  const relative = midi - tonic(key)
+  const octave = Math.floor(relative / 12)
+  const pitch = relative - octave * 12
+  const lower = intervals.findLastIndex((interval) => interval <= pitch)
+  const index = intervals[lower] === pitch || key >= 0 ? lower : lower + 1
+  return { degree: index + 1, octave, accidental: pitch - intervals[index] }
 }
 export function beatList(score: Project, bar: Beat[], index: number) {
   const end = bar.findLastIndex((beat) => !beat.draft)
@@ -387,7 +399,10 @@ function beatValid(beat: unknown, tuning: number[]) {
   return object(beat) && durations.includes(beat.duration as Duration) && number(beat.dots, 0, 2)
     && (beat.tuplet === undefined || Array.isArray(beat.tuplet) && beat.tuplet.length === 2 && beat.tuplet.every((n) => number(n, 1, 16)))
     && (beat.tupletGroup === undefined || string(beat.tupletGroup, 80))
-    && (beat.grace === undefined || Array.isArray(beat.grace) && beat.grace.length <= 4 && beat.grace.every((pitch) => number(pitch, 0, 127)))
+    && [beat.grace, beat.graceAfter].every((grace) => grace === undefined ||
+      Array.isArray(grace) && grace.length <= maxGraceNotes && grace.every((pitch) => number(pitch, 0, 127)))
+    && (beat.graceLines === undefined || object(beat.graceLines) &&
+      [beat.graceLines.grace, beat.graceLines.graceAfter].every((lines) => lines === undefined || number(lines, 1, 4)))
     && marksValid(beat.marks) && spansValid(beat.spans)
     && (beat.verses === undefined || Array.isArray(beat.verses) && beat.verses.length <= 5 && beat.verses.every((line) => string(line)))
     && typeof beat.triplet === 'boolean' && flag(beat.draft) && flag(beat.tie) && flag(beat.slur)

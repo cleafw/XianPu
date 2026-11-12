@@ -1,5 +1,5 @@
 import { Environment, rendering, type AlphaTabApi, type model, type platform } from '@coderline/alphatab'
-import type { IntroRange } from './model'
+import type { GraceSide, IntroRange } from './model'
 
 // This adapter is for the renderer objects in the pinned alphaTab version.
 type Glyph = {
@@ -37,6 +37,7 @@ type BarRenderer = {
   createPostBeatGlyphs(): void
   buildBoundingsLookup(master: rendering.MasterBarBounds, cx: number, cy: number): void
   addBeatGlyph(container: BeatContainer): void
+  getBeatX(beat: model.Beat, position: number): number
   shouldPaintBeamingHelper(helper: NumberedBeam): boolean
   calculateBeamY(helper: NumberedBeam, x: number): number
   paintBar(cx: number, cy: number, canvas: platform.ICanvas, helper: NumberedBeam, element: number): void
@@ -51,8 +52,17 @@ type StackLayout = { heads: () => (Glyph | null)[]; place: (offsets: readonly nu
 type NumberedLayout = { stacks: StackLayout[]; notes: NoteGlyph[]; lines: number }
 const numberedLayouts = new WeakMap<BarRenderer, NumberedLayout>()
 const originalDotY = new WeakMap<NumberedHead, number>()
+type NumberedGrace = { anchor: model.Beat; side: GraceSide; lines: number; next?: model.Beat; connect: boolean }
+const numberedGrace = new WeakMap<model.Beat, NumberedGrace>()
+const middleNotes = 2 // alphaTab BeatXPosition.MiddleNotes
 const introPadding = 14
 let installed = false
+
+export function registerNumberedGrace(group: model.Beat[], anchor: model.Beat, side: GraceSide, lines: number) {
+  group.forEach((beat, index) => numberedGrace.set(beat, {
+    anchor, side, lines, next: group[index + 1], connect: side === 'grace' ? index === group.length - 1 : index === 0,
+  }))
+}
 
 function withNote<T>(notes: model.Note[], note: model.Note, action: () => T): T {
   const first = notes[0]
@@ -179,6 +189,68 @@ function underlineRest(renderer: BarRenderer, glyph: NoteGlyph, lines: number) {
   }
 }
 
+function paintNumberedGrace(renderer: BarRenderer, beat: model.Beat, glyph: NoteGlyph, pre: BeatGlyph | undefined, grace: NumberedGrace) {
+  const lift = 18
+  const spacing = 2.15
+  const paint = glyph.paint.bind(glyph)
+  const top = glyph.getBoundingBoxTop.bind(glyph)
+  const bottom = glyph.getBoundingBoxBottom.bind(glyph)
+  const layout = glyph.doLayout.bind(glyph)
+  glyph.doLayout = () => {
+    layout()
+    glyph.width += 3
+    glyph.computedWidth = glyph.width
+    const head = glyph.noteHeads
+    if (head && head._octaveDots < 0) head._octaveDotsY += 1.5 + (grace.lines - 1) * spacing
+  }
+  glyph.getBoundingBoxTop = () => top() - lift
+  glyph.getBoundingBoxBottom = () => Math.max(bottom() - lift, glyph.noteHeads
+    ? underlineTop(glyph, glyph.noteHeads) - lift + (grace.lines - 1) * spacing : -Infinity)
+  if (pre) {
+    const layoutPre = pre.doLayout.bind(pre)
+    pre.doLayout = () => {
+      layoutPre()
+      pre.width += 3
+      pre.computedWidth = pre.width
+    }
+    const paintPre = pre.paint.bind(pre)
+    pre.paint = (cx, cy, canvas) => paintPre(cx, cy - lift, canvas)
+  }
+  glyph.paint = (cx, cy, canvas) => {
+    canvas.beginGroup(grace.side === 'grace' ? 'xianpu-grace-before' : 'xianpu-grace-after')
+    paint(cx, cy - lift, canvas)
+    const head = glyph.noteHeads
+    if (head) {
+      const center = cx + glyph.x + glyph.onTimeX
+      const beatX = renderer.getBeatX(beat, middleNotes)
+      const left = center - head.width / 2
+      const right = grace.next ? center + renderer.getBeatX(grace.next, middleNotes) - beatX : center + head.width / 2
+      const y = cy + underlineTop(glyph, head) - lift
+      canvas.beginGroup('xianpu-grace-underlines')
+      for (let line = 0; line < grace.lines; line++) canvas.fillRect(left, y + line * spacing, right - left, 0.9)
+      canvas.endGroup()
+      if (grace.connect) {
+        const anchorX = center + renderer.getBeatX(grace.anchor, middleNotes) - beatX
+        const direction = grace.side === 'grace' ? 1 : -1
+        const startX = center + direction * head.width / 2
+        const startY = y + (grace.lines - 1) * spacing + 1.2
+        const endX = anchorX - direction * 5
+        const endY = cy + glyph.y + head.y - 4
+        const oldWidth = canvas.lineWidth
+        canvas.lineWidth = 0.85
+        canvas.beginGroup('xianpu-grace-connector')
+        canvas.beginPath()
+        canvas.moveTo(startX, startY)
+        canvas.quadraticCurveTo((startX + endX) / 2, Math.max(startY, endY) + 3, endX, endY)
+        canvas.stroke()
+        canvas.endGroup()
+        canvas.lineWidth = oldWidth
+      }
+    }
+    canvas.endGroup()
+  }
+}
+
 function reserveIntroPadding(renderer: BarRenderer, opening: boolean, closing: boolean) {
   if (opening) {
     const create = renderer.createPreBeatGlyphs.bind(renderer)
@@ -284,6 +356,8 @@ function patchNumberedNotation(result: BarRenderer) {
   result.addBeatGlyph = (container) => {
     const { beat, preNotes, onNotes, barCount } = container
     if (beat && !beat.isEmpty && onNotes) {
+      const grace = numberedGrace.get(beat)
+      if (grace) paintNumberedGrace(result, beat, onNotes, preNotes, grace)
       const lines = Math.max(0, barCount ?? Math.log2(beat.duration / 4))
       if (!beat.graceType) {
         layout.notes.push(onNotes)

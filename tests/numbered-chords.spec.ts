@@ -362,6 +362,154 @@ test('deletes selected stack layers and keeps the beat rhythm when the whole sta
   await expect(digits(0)).toHaveText(['1', '5'])
 })
 
+test('clears formatting for a note selection from the score menu and undoes it together', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  const track = project.tracks[0]
+  track.bars[0] = [
+    { ...blank(), draft: false, notes: [{ midi: 60 }] },
+    { ...blank(8), draft: false, dots: 1, grace: [59], notes: [{ midi: 62 }],
+      marks: [{ id: 'mark', code: 'staccato', place: 'above', dx: 0, dy: 0 }] },
+    { ...blank(2), draft: false, notes: [{ midi: 64 }] },
+  ]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'clear-formatting.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  await entry.getByRole('button', { name: '简谱位置 2', exact: true }).click()
+  await entry.getByRole('button', { name: '简谱位置 3', exact: true }).click({ modifiers: ['Shift'] })
+  await expect(entry.getByText('已选 2 个音符位置')).toBeVisible()
+  const digit = page.locator('.canvas svg text[style*="dominant-baseline: middle"]').filter({ hasText: /^3$/ }).first()
+  const box = (await digit.boundingBox())!
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' })
+  await page.getByRole('group', { name: '音符编辑' }).getByRole('button', { name: '清除格式' }).click()
+  await expect(page.getByRole('status')).toContainText('已清除所选音符的格式。')
+  const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+  expect(parseProject(draft).tracks[0].bars[0].slice(0, 3)).toEqual([
+    track.bars[0][0], { ...blank(), draft: false }, { ...blank(), draft: false },
+  ])
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(page.locator('.canvas [data-code=staccato]')).toHaveCount(1)
+  await expect(entry.getByRole('button', { name: '简谱位置 3', exact: true })).toHaveText('3E')
+})
+
+test('draws directly added numbered grace notes above the main digit with adjustable lines and connectors', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.tracks[0].bars[0] = [{ ...blank(), draft: false, notes: [{ midi: 67 }] }]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'grace-layout.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const editor = page.getByRole('region', { name: '录入面板' })
+  await editor.getByRole('button', { name: '倚音与成组连音', exact: true }).click()
+  const pitch = editor.getByRole('combobox', { name: '倚音音高' })
+  const octave = editor.getByRole('combobox', { name: '倚音八度' })
+  await pitch.selectOption('1')
+  await octave.selectOption('-1')
+  await editor.getByRole('combobox', { name: '前倚音减时线' }).selectOption('2')
+  await editor.getByRole('button', { name: '添加前倚音' }).click()
+  await pitch.selectOption('2')
+  await octave.selectOption('0')
+  await editor.getByRole('button', { name: '添加后倚音' }).click()
+  await editor.getByRole('combobox', { name: '后倚音减时线' }).selectOption('3')
+
+  async function check(scope: string) {
+    const main = page.locator(scope + ' svg text[style*="dominant-baseline: middle"]').filter({ hasText: /^5$/ })
+    await expect(main).toHaveCount(1)
+    const geometry = await main.evaluate((element) => {
+      const main = element as SVGTextElement
+      const svg = main.ownerSVGElement!
+      const center = main.getBBox().x + main.getBBox().width / 2
+      const baseline = Number(main.getAttribute('y'))
+      return ['before', 'after'].map((side) => {
+        const group = svg.querySelector('.xianpu-grace-' + side)!
+        const digit = group.querySelector('text')!
+        const lines = [...group.querySelectorAll<SVGGraphicsElement>('.xianpu-grace-underlines > *')]
+        const connector = group.querySelector<SVGPathElement>('.xianpu-grace-connector path')!
+        const start = connector.getPointAtLength(0)
+        const end = connector.getPointAtLength(connector.getTotalLength())
+        return { digit: digit.textContent, x: digit.getBBox().x - center, y: Number(digit.getAttribute('y')) - baseline,
+          scale: parseFloat(getComputedStyle(digit).fontSize) / parseFloat(getComputedStyle(main).fontSize),
+          lines: lines.length, linesBelow: lines.every((line) => line.getBBox().y > Number(digit.getAttribute('y'))),
+          curve: connector.getAttribute('d'), connectorBelow: start.y >= lines.at(-1)!.getBBox().y,
+          endX: end.x - center, endY: end.y - baseline,
+        }
+      })
+    })
+    expect(geometry.map(({ digit, lines }) => [digit, lines])).toEqual([['1', 2], ['2', 3]])
+    expect(geometry[0].x).toBeLessThan(0)
+    expect(geometry[1].x).toBeGreaterThan(0)
+    for (const item of geometry) {
+      expect(item.y).toBeLessThan(-10)
+      expect(item.scale).toBeLessThan(0.65)
+      expect(item.linesBelow && item.connectorBelow).toBe(true)
+      expect(item.curve).toMatch(/Q/i)
+      expect(Math.abs(item.endX)).toBeLessThan(7)
+      expect(Math.abs(item.endY)).toBeLessThan(6)
+    }
+  }
+  const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+  expect(parseProject(draft).tracks[0].bars[0][0]).toMatchObject({
+    grace: [48], graceAfter: [62], graceLines: { grace: 2, graceAfter: 3 },
+  })
+  await check('.canvas')
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  await check('.preview-scroll .print-page')
+})
+
+test('converts selected notes into small numbers before or after the main note', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  const track = project.tracks[0]
+  track.bars[0] = [60, 62, 64, 65].map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] }))
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'convert-grace.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  const beat = (index: number) => entry.getByRole('button', { name: '简谱位置 ' + index, exact: true })
+  const menu = page.getByRole('group', { name: '音符编辑' })
+  const current = () => page.evaluate(() => JSON.parse(localStorage.getItem('xianpu.recovery.v1')!))
+  async function convert(first: number, last: number, caption: string) {
+    await beat(first).click()
+    await beat(last).click({ modifiers: ['Shift'] })
+    await beat(last).click({ button: 'right' })
+    await menu.getByRole('button', { name: caption }).click()
+  }
+  async function checkGlyphs(scope: string) {
+    const digits = page.locator(scope + ' svg text[style*="dominant-baseline: middle"]').filter({ hasText: /^[1-4]$/ })
+    await expect(digits).toHaveCount(4)
+    return digits.evaluateAll((items) => items.sort((a, b) => Number(a.getAttribute('x')) - Number(b.getAttribute('x')))
+      .map((item) => ({ digit: item.textContent, size: Number.parseFloat(getComputedStyle(item).fontSize) })))
+  }
+  await convert(1, 2, '转为前倚音')
+  expect((await current()).tracks[0].bars[0][0]).toMatchObject({ notes: [{ midi: 64 }], grace: [60, 62] })
+  const before = await checkGlyphs('.canvas')
+  expect(before.map(({ digit }) => digit)).toEqual(['1', '2', '3', '4'])
+  expect(before[1].size).toBeLessThan(before[2].size)
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(beat(1)).toHaveText('1C')
+
+  await convert(2, 3, '转为后倚音')
+  const edited = await current()
+  expect(edited.tracks[0].bars[0][0]).toMatchObject({ notes: [{ midi: 60 }], graceAfter: [62, 64] })
+  const after = await checkGlyphs('.canvas')
+  expect(after.map(({ digit }) => digit)).toEqual(['1', '2', '3', '4'])
+  expect(after[1].size).toBeLessThan(after[0].size)
+  const sounds = await page.evaluate(async ({ edited, track }) => {
+    const { buildPlaybackMidi } = await import('/src/playback.ts') as typeof import('../src/playback')
+    return buildPlaybackMidi(edited, track).events.filter((event) => 'noteVelocity' in event && event.noteVelocity > 0)
+      .map((event) => [event.tick, 'noteKey' in event ? event.noteKey : null])
+  }, { edited, track: track.id })
+  expect(sounds).toEqual([[0, 60], [800, 62], [880, 64], [960, 65]])
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  const printed = await checkGlyphs('.preview-scroll .print-page')
+  expect(printed.map(({ digit }) => digit)).toEqual(['1', '2', '3', '4'])
+  expect(printed[2].size).toBeLessThan(printed[3].size)
+})
+
 test('copies just the clicked chord layer with shortcuts, buttons, or the score menu', async ({ page }) => {
   const project = createProject('song')
   project.tracks = project.tracks.slice(0, 1)

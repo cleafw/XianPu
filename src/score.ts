@@ -3,9 +3,9 @@ import { translate, type Language } from './i18n'
 import { engraveMarks, markSpace } from './engraveMarks'
 import { createScoreWatermark } from './scoreWatermark'
 import bravura from '@coderline/alphatab/font/Bravura.woff2?url'
-import { beatList, guitarTuning, measureSettings, writtenKey, type Beat, type Project } from './model'
+import { beatList, guitarTuning, measureSettings, writtenKey, type Beat, type GraceSide, type Project } from './model'
 import { resolveScoreNavigation, type NavigationDirection } from './scoreNavigation'
-import { alignBarColumns, enableScoreRendering, spaceTrackMarks } from './scoreRendering'
+import { alignBarColumns, enableScoreRendering, registerNumberedGrace, spaceTrackMarks } from './scoreRendering'
 
 export function scoreSettings() {
   const settings = new Settings()
@@ -18,6 +18,7 @@ export function scoreSettings() {
   settings.notation.elements.set(NotationElement.EffectDynamics, false)
   settings.notation.elements.set(NotationElement.EffectNumberedNotationKeySignature, false)
   settings.display.notationStaffPaddingBottom = 12
+  settings.display.resources.numberedNotationGraceFont.size = 9
   const lyrics = settings.display.resources.elementFonts.get(NotationElement.EffectLyrics)!
   lyrics.families = ['XianPuLyrics', 'Microsoft YaHei UI', 'Microsoft YaHei', 'sans-serif']
   lyrics.style = model.FontStyle.Plain
@@ -47,8 +48,11 @@ function addScoreBeat(voice: model.Voice, data: Beat, legacyLyrics: boolean, ind
   const { bar } = voice
   const { staff } = bar
   const priorBeat = voice.beats.findLast((beat) => !beat.graceType) ?? staff.bars[bar.index - 1]?.voices[voice.index]?.beats.findLast((beat) => !beat.graceType)
-  if (data.notes.length && !staff.isPercussion) {
-    for (const pitch of data.grace ?? []) {
+  const beat = new model.Beat()
+  function addGrace(side: GraceSide) {
+    if (!data.notes.length || staff.isPercussion) return
+    const group: model.Beat[] = []
+    for (const pitch of data[side] ?? []) {
       const grace = new model.Beat()
       grace.duration = model.Duration.Eighth
       grace.graceType = model.GraceType.BeforeBeat
@@ -65,9 +69,11 @@ function addScoreBeat(voice: model.Voice, data: Beat, legacyLyrics: boolean, ind
       grace.addNote(note)
       sourceIndexes.set(grace, { index })
       voice.addBeat(grace)
+      group.push(grace)
     }
+    registerNumberedGrace(group, beat, side, data.graceLines?.[side] ?? 1)
   }
-  const beat = new model.Beat()
+  addGrace('grace')
   sourceIndexes.set(beat, { index, data })
   beat.duration = data.duration
   beat.dots = data.dots
@@ -118,6 +124,7 @@ function addScoreBeat(voice: model.Voice, data: Beat, legacyLyrics: boolean, ind
     note.isTieDestination = Boolean(data.tie && priorBeat?.notes.some((other) =>
       other.string === note.string && other.realValue === note.realValue))
   }
+  addGrace('graceAfter')
 }
 
 function pianoBeat(data: Beat, lower: boolean): Beat {

@@ -25,7 +25,7 @@ import { copyMeasures, pasteMeasures, type MeasureClipboard, type PasteMode } fr
 import * as storage from './storage'
 import { importMidi, maxMidiBytes } from './midiImport'
 import { changeKeySignature, type KeyChangeError, type KeyChangeMode } from './keyChange'
-import { clearSelectedNotes, copySelectedNotes, editRhythmSelection, pasteSelectedNotes, sameBeat, sameVoice, selectedBeats, shiftSelectedPitches, type NoteClipboard } from './noteSelection'
+import { clearSelectedNotes, convertNotesToGrace, copySelectedNotes, editRhythmSelection, pasteSelectedNotes, resetSelectedNotes, sameBeat, sameVoice, selectedBeats, shiftSelectedPitches, type NoteClipboard } from './noteSelection'
 import './styles.css'
 
 type History = { past: Project[]; value: Project | null; future: Project[] }
@@ -71,6 +71,7 @@ function retune(track: Track, tuning: number[], capo = track.capo): Track {
   const delta = (capo ?? 0) - (track.capo ?? 0)
   const shift = (bars: Beat[][]) => bars.map((bar) => bar.map((beat) => ({ ...beat,
     grace: beat.grace?.map((pitch) => pitch + delta),
+    graceAfter: beat.graceAfter?.map((pitch) => pitch + delta),
     notes: beat.notes.map((note) => note.string ? { ...note, midi: tuning[note.string - 1] + note.fret! } : note),
   })))
   return { ...track, capo, tuning, bars: shift(track.bars),
@@ -513,6 +514,31 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       commit((score) => changeBeat(score, position, () => blank()))
     }
   }
+  function clearNoteFormatting() {
+    if (!project) return
+    const reset = resetSelectedNotes(project, copyTargets)
+    setBarMenu(null)
+    if (reset === project) return
+    commit(() => reset)
+    clearNoteSelection()
+    setSelection({ ...position, note: undefined, string: undefined, editDraftRest: true })
+    setError(null)
+    reportNoteOverflow(reset, copyTargets.map(({ position }) => position), message('已清除所选音符的格式。'))
+  }
+  function convertGrace(side: 'grace' | 'graceAfter') {
+    if (!project) return
+    const result = convertNotesToGrace(project, copyTargets, side)
+    setBarMenu(null)
+    if ('error' in result) {
+      setError(message(result.error === 'selection' ? '请选择同一声部内连续的单音。' : result.error === 'limit'
+        ? '主音同一侧最多可添加 4 个倚音。' : side === 'grace' ? '选区后面需要紧邻一个主音。' : '选区前面需要紧邻一个主音。'))
+      return
+    }
+    commit(() => result.score)
+    selectBeat({ ...result.position, lane: position.lane })
+    setError(null)
+    setNotice(message(side === 'grace' ? '已转为前倚音。' : '已转为后倚音。'))
+  }
   function selectNoteRange(from: Position, to: Position) {
     const item = project?.tracks.find(({ id }) => id === from.track)
     if (!project || !item || !sameVoice(from, to)) return
@@ -617,7 +643,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   function showClipboardMenu(target: Position, event: MouseEvent, kind: 'measure' | 'note') {
     event.preventDefault()
     if (kind === 'note') {
-      if (!noteTargets.some(({ position, notes }) => sameBeat(position, target) && (!notes || target.note !== undefined && notes.has(target.note)))) {
+      if (!noteTargets.some(({ position, notes }) => sameBeat(position, target) && (!notes || target.note === undefined || notes.has(target.note)))) {
         selectBeat(target, true)
       }
     } else if (!measureSelection.includes(target.bar) || !sameVoice(target, position)) {
@@ -627,7 +653,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     const doc = event.currentTarget.ownerDocument
     const view = doc.defaultView ?? window
     setBarMenu({ x: Math.max(0, Math.min(event.clientX, view.innerWidth - 265)),
-      y: Math.max(0, Math.min(event.clientY, view.innerHeight - (kind === 'note' ? 90 : 310))), position: target, document: doc, kind })
+      y: Math.max(0, Math.min(event.clientY, view.innerHeight - (kind === 'note' ? 192 : 310))), position: target, document: doc, kind })
   }
   function copySelection(all = false) {
     if (!project || !track) return
@@ -1136,7 +1162,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                       const target = { track: item.id, bar: barIndex, beat: index, voice: item.id === position.track ? activeVoice : 0 }
                       if (event.shiftKey || event.ctrlKey || event.metaKey) selectNote(target, event)
                       else selectBeat(target, !value.notes.length)
-                    }}>
+                    }} onContextMenu={(event) => showClipboardMenu({
+                      track: item.id, bar: barIndex, beat: index, voice: item.id === position.track ? activeVoice : 0,
+                    }, event, 'note')}>
                     <small>{index + 1}</small><span>{value.draft ? '·' : value.notes.length ? value.notes.map((note) => note.string ? note.fret : pitchNames[note.midi % 12]).join('·') : t('休')}</span>
                   </button>)}
                 </div></div>)}
@@ -1171,6 +1199,12 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         {barMenu.kind === 'note' ? <>
           <button autoFocus disabled={!copyTargets.length} onClick={copyNotes}>{t('复制所选音符')}</button>
           <button disabled={!noteClipboard} onClick={() => pasteNotes(barMenu.position)}>{t('粘贴音符')}</button>
+          {entryMode === 'numbered' && <>
+            <button disabled={!copyTargets.some(({ beat }) => beat.notes.length)} onClick={() => convertGrace('grace')}>{t('转为前倚音')}</button>
+            <button disabled={!copyTargets.some(({ beat }) => beat.notes.length)} onClick={() => convertGrace('graceAfter')}>{t('转为后倚音')}</button>
+          </>}
+          <button className="danger-action" disabled={!copyTargets.some(({ beat }) => !beat.draft)}
+            onClick={clearNoteFormatting}>{t('清除格式')}</button>
         </> : <>
         <button autoFocus onClick={() => copySelection()}>{t('复制小节')}</button>
         {!activePart && <button onClick={() => copySelection(true)}>{t('复制整段总谱')}</button>}

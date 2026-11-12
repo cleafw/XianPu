@@ -1,4 +1,4 @@
-import { beatList, blank, capacity, durations, matchingTie, ticks, voiceBars, type Beat, type Position, type Project, type Track } from './model.ts'
+import { beatList, blank, capacity, durations, matchingTie, maxGraceNotes, ticks, voiceBars, type Beat, type Position, type Project, type Track } from './model.ts'
 import { guitarFingering } from './keyChange.ts'
 
 export type RhythmEdit = 'shorten' | 'lengthen' | 'add-extension' | 'remove-extension'
@@ -39,7 +39,7 @@ export function selectedBeats(score: Project, positions: readonly Position[]) {
 }
 
 type Replacement = { position: Position; beat: Beat }
-function replaceBeats(score: Project, edits: Replacement[]) {
+function replaceBeats(score: Project, edits: Replacement[], resetFormatting = false) {
   if (!edits.length) return score
   return { ...score, tracks: score.tracks.map((track) => {
     const trackEdits = edits.filter(({ position }) => position.track === track.id)
@@ -54,21 +54,43 @@ function replaceBeats(score: Project, edits: Replacement[]) {
       }
       if (!byBar.size) return bars
       const removed = new Set<string>()
+      const resetPositions = new Map<number, Set<number>>()
+      const brokenTuplets = new Set<string>()
       const changed = bars.map((bar, index) => {
         const items = byBar.get(index)
         if (!items) return bar
         const last = Math.max(bar.length - 1, ...items.map(({ position }) => position.beat))
         const beats = beatList(score, bar, index).slice(0, last + 1)
         for (const { position, beat } of items) {
-          for (const span of beats[position.beat]?.spans ?? []) {
+          const original = beats[position.beat]
+          for (const span of original?.spans ?? []) {
             if (!beat.spans?.some(({ id }) => id === span.id)) removed.add(span.id)
+          }
+          if (resetFormatting && !beat.notes.length) {
+            const reset = resetPositions.get(index) ?? new Set<number>()
+            reset.add(position.beat)
+            resetPositions.set(index, reset)
+            if (original?.tupletGroup) brokenTuplets.add(original.tupletGroup)
           }
           beats[position.beat] = beat
         }
         return beats
       })
-      return removed.size ? changed.map((bar) => bar.map((beat) => beat.spans?.some(({ id }) => removed.has(id))
-        ? { ...beat, spans: beat.spans.filter(({ id }) => !removed.has(id)) } : beat)) : changed
+      if (!removed.size && !resetPositions.size) return changed
+      return changed.map((bar, index) => bar.map((beat, offset) => {
+        const reset = resetPositions.get(index)
+        const cutSlur = beat.slur && (reset?.has(offset + 1) ||
+          resetPositions.get(index + 1)?.has(0) && offset === beatList(score, bars[index], index).length - 1)
+        const previousReset = resetPositions.get(index - 1)
+        const cutTie = beat.tie && (offset > 0 ? reset?.has(offset - 1) :
+          previousReset?.has(beatList(score, bars[index - 1], index - 1).length - 1))
+        const cutSpan = beat.spans?.some(({ id }) => removed.has(id))
+        const cutTuplet = beat.tupletGroup && brokenTuplets.has(beat.tupletGroup)
+        if (!cutSlur && !cutTie && !cutSpan && !cutTuplet) return beat
+        return { ...beat, ...(cutSlur ? { slur: false } : {}), ...(cutTie ? { tie: false } : {}),
+          ...(cutSpan ? { spans: beat.spans?.filter(({ id }) => !removed.has(id)) } : {}),
+          ...(cutTuplet ? { tupletGroup: undefined } : {}) }
+      }))
     }
     return { ...track, bars: replace(track.bars, 0), voices: track.voices?.map((voice, index) => ({ ...voice, bars: replace(voice.bars, index + 1) })) }
   }) }
@@ -102,6 +124,65 @@ export function clearSelectedNotes(score: Project, targets: SelectedBeat[]) {
     return { position, beat: remaining.length ? { ...beat, notes: remaining }
       : { ...blank(beat.duration), dots: beat.dots, triplet: beat.triplet, tuplet: beat.tuplet, tupletGroup: beat.tupletGroup, draft: false } }
   }))
+}
+
+export function resetSelectedNotes(score: Project, targets: SelectedBeat[]) {
+  return replaceBeats(score, targets.filter(({ beat }) => !beat.draft).map(({ position, beat, notes }) => {
+    const remaining = notes ? beat.notes.filter((_, index) => !notes.has(index)) : []
+    return { position, beat: remaining.length ? { ...beat, notes: remaining } : { ...blank(), draft: false } }
+  }), true)
+}
+
+export function convertNotesToGrace(score: Project, targets: SelectedBeat[], side: 'grace' | 'graceAfter') {
+  const first = targets[0]?.position
+  const track = score.tracks.find(({ id }) => id === first?.track)
+  if (!first || !track || targets.some(({ position, beat }) => !sameVoice(position, first) || beat.draft || beat.notes.length !== 1)) {
+    return { error: 'selection' } as const
+  }
+  const bars = voiceBars(track, first.voice)
+  const startBar = Math.max(0, first.bar - 1)
+  const endBar = targets.at(-1)!.position.bar + 1
+  const beats = bars.slice(startBar, endBar + 1).flatMap((bar, index) => {
+    const barIndex = startBar + index
+    const count = score.measures[barIndex].simile ? 0 : bar.findLastIndex((beat) => !beat.draft) + 1
+    return (count ? bar.slice(0, count) : [blank()]).map((beat, index) => ({
+      position: { ...first, bar: barIndex, beat: index, note: undefined, string: undefined }, beat,
+    }))
+  })
+  const start = beats.findIndex(({ position }) => sameBeat(position, first))
+  if (start < 0 || targets.some(({ position }, index) => !beats[start + index] || !sameBeat(beats[start + index].position, position))) {
+    return { error: 'selection' } as const
+  }
+  const anchor = beats[side === 'grace' ? start + targets.length : start - 1]
+  if (!anchor?.beat.notes.length) return { error: 'anchor' } as const
+  const pitches = targets.flatMap(({ beat }) => [...beat.grace ?? [], beat.notes[0].midi, ...beat.graceAfter ?? []])
+  const existing = anchor.beat[side] ?? []
+  if (pitches.length + existing.length > maxGraceNotes) return { error: 'limit' } as const
+
+  const cleaned = replaceBeats(score, targets.map(({ position }) => ({ position, beat: { ...blank(), draft: false } })), true)
+  const selectedByBar = new Map<number, Set<number>>()
+  for (const { position: { bar, beat } } of targets) {
+    const selected = selectedByBar.get(bar) ?? new Set<number>()
+    selected.add(beat)
+    selectedByBar.set(bar, selected)
+  }
+  const position = { ...anchor.position,
+    beat: anchor.position.beat - [...selectedByBar.get(anchor.position.bar) ?? []].filter((index) => index < anchor.position.beat).length }
+  const tracks = cleaned.tracks.map((item) => {
+    if (item.id !== track.id) return item
+    const updated = voiceBars(item, first.voice).map((bar, index) => {
+      const selected = selectedByBar.get(index)
+      if (!selected && index !== anchor.position.bar) return bar
+      return bar.flatMap((beat, offset) => {
+        if (selected?.has(offset)) return []
+        return [index === anchor.position.bar && offset === anchor.position.beat
+          ? { ...beat, [side]: side === 'grace' ? [...pitches, ...existing] : [...existing, ...pitches] } : beat]
+      })
+    })
+    return first.voice ? { ...item, voices: item.voices?.map((voice, index) =>
+      index + 1 === first.voice ? { ...voice, bars: updated } : voice) } : { ...item, bars: updated }
+  })
+  return { score: { ...cleaned, tracks }, position }
 }
 
 export type NoteClipboard = { beats: Beat[]; tuning: number[] }

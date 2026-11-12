@@ -50,13 +50,15 @@ function shiftChord(chord: string, delta: number, key: number) {
 }
 
 function shiftBeat(beat: Beat, tuning: number[], delta: number, key: number): Beat | KeyChangeError {
-  if (!beat.notes.length && !beat.grace?.length && !beat.chord && !beat.diagram) return beat
+  if (!beat.notes.length && !beat.grace?.length && !beat.graceAfter?.length && !beat.chord && !beat.diagram) return beat
   const shifted = beat.notes.map((note) => ({ ...note, midi: note.midi + delta }))
   const grace = beat.grace?.map((pitch) => pitch + delta)
-  if (shifted.some(({ midi }) => !pitchInRange(midi)) || grace?.some((pitch) => !pitchInRange(pitch))) return 'pitch-range'
+  const graceAfter = beat.graceAfter?.map((pitch) => pitch + delta)
+  const ornaments = [...grace ?? [], ...graceAfter ?? []]
+  if (shifted.some(({ midi }) => !pitchInRange(midi)) || ornaments.some((pitch) => !pitchInRange(pitch))) return 'pitch-range'
 
   const notes = guitarFingering(shifted, tuning)
-  if (!notes || (tuning.length && grace?.some((pitch) => !tuning.some((open) => fretInRange(pitch - open))))) return 'guitar-range'
+  if (!notes || (tuning.length && ornaments.some((pitch) => !tuning.some((open) => fretInRange(pitch - open))))) return 'guitar-range'
   let diagram = beat.diagram
   if (diagram) {
     const tones = diagram.flatMap((fret, i) => fret < 0 ? [] : [{ midi: tuning[i] + fret + delta, string: i + 1 }])
@@ -72,7 +74,7 @@ function shiftBeat(beat: Beat, tuning: number[], delta: number, key: number): Be
     const string = notes[index]?.string
     return string === undefined || string === mark.string ? mark : { ...mark, string }
   })
-  return { ...beat, notes, grace, marks, diagram, chord: beat.chord && shiftChord(beat.chord, delta, key) }
+  return { ...beat, notes, grace, graceAfter, marks, diagram, chord: beat.chord && shiftChord(beat.chord, delta, key) }
 }
 
 export function changeKeySignature(project: Project, key: number | undefined, mode: KeyChangeMode, bar?: number):

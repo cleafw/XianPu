@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { beatList, blank, createProject, parseProject } from '../src/model.ts'
-import { copySelectedNotes, editRhythmSelection, pasteSelectedNotes, selectedBeats, shiftSelectedPitches, steppedRhythm } from '../src/noteSelection.ts'
+import { convertNotesToGrace, copySelectedNotes, editRhythmSelection, pasteSelectedNotes, resetSelectedNotes, selectedBeats, shiftSelectedPitches, steppedRhythm } from '../src/noteSelection.ts'
 
 test('batch rhythm deduplicates chord notes and applies equally to explicit rests', () => {
   const project = createProject('song')
@@ -34,6 +34,31 @@ test('octave moves selected chord tones only and refuses out-of-range edits atom
   assert.deepEqual(result.score.tracks[0].bars[0][0].notes.map(({ midi }) => midi), [60, 52])
 })
 
+test('clear formatting resets whole beats to plain rests and preserves unselected chord tones', () => {
+  const project = createProject('song')
+  const track = project.tracks[0]
+  track.bars[0] = [
+    { ...blank(), draft: false, notes: [{ midi: 60 }], slur: true },
+    { ...blank(8), draft: false, dots: 1, grace: [59], notes: [{ midi: 60 }], lyric: '词', chord: 'C',
+      tuplet: [3, 2], tupletGroup: 'group', marks: [{ id: 'mark', code: 'staccato', place: 'above', dx: 0, dy: 0 }],
+      spans: [{ id: 'span', kind: 'crescendo', end: false }] },
+    { ...blank(8), draft: false, tie: true, tuplet: [3, 2], tupletGroup: 'group', notes: [{ midi: 60 }, { midi: 64 }],
+      spans: [{ id: 'span', kind: 'crescendo', end: true }] },
+  ]
+  const first = { track: track.id, bar: 0, beat: 1 }
+  const reset = resetSelectedNotes(project, selectedBeats(project, [first, { ...first, beat: 2, note: 1 }]))
+  const [before, rest, chord] = reset.tracks[0].bars[0]
+  assert.deepEqual(rest, { ...blank(), draft: false })
+  assert.equal(before.slur, false)
+  assert.equal(chord.tie, false)
+  assert.deepEqual(chord.spans, [])
+  assert.equal(chord.tupletGroup, undefined)
+  assert.deepEqual(chord.tuplet, [3, 2])
+  assert.deepEqual(chord.notes, [{ midi: 60 }])
+  assert.equal(reset.tracks[1], project.tracks[1])
+  assert.equal(track.bars[0][1].notes.length, 1)
+})
+
 test('note clipboard remaps complete spans and covers positions across a barline', () => {
   const project = createProject('song')
   const track = project.tracks[0]
@@ -51,6 +76,27 @@ test('note clipboard remaps complete spans and covers positions across a barline
   assert.equal(bars[0][3].spans?.[0].id, bars[1][0].spans?.[0].id)
   assert.equal(pasted.score.tracks[1], project.tracks[1])
   assert.deepEqual(pasteSelectedNotes(project, { ...first, bar: 3, beat: 3 }, clipboard), { error: 'space' })
+})
+
+test('converting notes to ornaments preserves their order and can attach across a barline', () => {
+  const project = createProject('song')
+  const track = project.tracks[0]
+  track.bars[0] = [60, 62, 64, 65].map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] }))
+  track.bars[1] = [67, 69, 71].map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] }))
+  const first = { track: track.id, bar: 1, beat: 0 }
+  const targets = selectedBeats(project, [first, { ...first, beat: 1 }])
+  const after = convertNotesToGrace(project, targets, 'graceAfter')
+  assert.ok('score' in after)
+  assert.deepEqual(after.score.tracks[0].bars[0][3].graceAfter, [67, 69])
+  assert.deepEqual(after.score.tracks[0].bars[1].map(({ notes }) => notes[0].midi), [71])
+  assert.deepEqual(after.position, { ...first, bar: 0, beat: 3, note: undefined, string: undefined })
+  parseProject(JSON.stringify(after.score))
+
+  const before = convertNotesToGrace(project, targets, 'grace')
+  assert.ok('score' in before)
+  assert.deepEqual(before.score.tracks[0].bars[1][0].grace, [67, 69])
+  assert.equal(before.position.beat, 0)
+  assert.deepEqual(convertNotesToGrace(project, selectedBeats(project, [first, { ...first, beat: 2 }]), 'grace'), { error: 'selection' })
 })
 
 test('pasting two eighth notes over the final quarter stays in that measure without adding a rest', () => {

@@ -20,10 +20,10 @@ test('aligns fields with their actions in dialogs, docked panels and floating pa
 
   const inspector = page.getByRole('region', { name: '录入面板' })
   await inspector.getByRole('button', { name: '倚音与成组连音', exact: true }).click()
-  await expectAligned(inspector.getByLabel('倚音音高'), inspector.getByRole('button', { name: '添加前倚音' }))
+  await expectAligned(inspector.getByLabel('倚音音高'), inspector.getByLabel('倚音八度'))
   await inspector.getByRole('button', { name: '弹出倚音与成组连音' }).click()
   const ornaments = page.getByRole('region', { name: '倚音与成组连音', exact: true })
-  await expectAligned(ornaments.getByLabel('倚音音高'), ornaments.getByRole('button', { name: '添加前倚音' }))
+  await expectAligned(ornaments.getByLabel('倚音音高'), ornaments.getByLabel('倚音八度'))
   await ornaments.getByRole('button', { name: '将倚音与成组连音贴回右栏' }).click()
 
   await page.getByRole('navigation').getByRole('button', { name: '吉他六线谱', exact: true }).click()

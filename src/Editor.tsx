@@ -4,7 +4,7 @@ import { NotationEditor } from './NotationEditor'
 import { ToolPanel } from './ToolPanel'
 import { eventElement, listenWorkspaceKeys } from './panelWindows'
 import type { SpanEnd } from './notationMarks'
-import { blank, durations, measureSettings, midiForDegree, pitchNames, previousBeat, matchingTie, staffAccidental, ticks, tonic, writtenKey, type Beat, type Duration, type Mode, type Position, type Project, type Track } from './model'
+import { blank, durations, graceLineCounts, maxGraceNotes, measureSettings, midiForDegree, numberedPitch, pitchNames, previousBeat, matchingTie, staffAccidental, ticks, tonic, writtenKey, type Beat, type Duration, type GraceSide, type Mode, type Position, type Project, type Track } from './model'
 import { steppedRhythm, type RhythmEdit } from './noteSelection'
 
 type Entry = { duration: Duration; dots: Beat['dots']; triplet: boolean; octave: number; accidental?: number; string: number }
@@ -32,6 +32,7 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
   const [stackNotes, setStackNotes] = useState(false)
   const [verse, setVerse] = useState(0)
   const [gracePitch, setGracePitch] = useState<number | null>(null)
+  const [graceNumber, setGraceNumber] = useState<{ degree: number; octave: number } | null>(null)
   const [tupletStart, setTupletStart] = useState<Position | null>(null)
   const [ratio, setRatio] = useState<[number, number]>([3, 2])
   useEffect(() => setTupletStart(null), [score.measures])
@@ -60,6 +61,7 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
       setError('')
       setDiagram(beat.diagram?.join(' ') ?? '')
       setGracePitch(null)
+      setGraceNumber(null)
       if (!beat.draft) setEntry((old) => ({ ...old, duration: beat.duration, dots: beat.dots, triplet: beat.triplet }))
     }
   }, [selectedKey, beat])
@@ -99,7 +101,7 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
     if (!addToBeat) next()
   }
   function rest() {
-    edit((old) => ({ ...old, ...rhythm, notes: [], draft: false, tie: false, slur: false, lyric: undefined, verses: undefined, grace: undefined }))
+    edit((old) => ({ ...old, ...rhythm, notes: [], draft: false, tie: false, slur: false, lyric: undefined, verses: undefined, grace: undefined, graceAfter: undefined, graceLines: undefined }))
     next()
   }
   function putFret(raw: string) {
@@ -181,23 +183,68 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
     return listenWorkspaceKeys(keyDown)
   })
   const notation = t(percussion ? '打击乐谱' : tab ? '吉他六线谱' : staff ? '五线谱' : '简谱')
+  const defaultGracePitch = Math.min(127, (current?.midi ?? 60) + 2)
+  const numberedGrace = graceNumber ?? numberedPitch(defaultGracePitch + transposition, keySignature)
+  const graceBase = midiForDegree(numberedGrace.degree, keySignature, 0, 0) - transposition
+  const minGraceOctave = Math.ceil(-graceBase / 12)
+  const maxGraceOctave = Math.floor((127 - graceBase) / 12)
+  const graceOctave = Math.min(maxGraceOctave, Math.max(minGraceOctave, numberedGrace.octave))
+  const graceToAdd = mode === 'numbered' ? graceBase + graceOctave * 12 : gracePitch ?? defaultGracePitch
+  const canPlayGrace = (pitch: number) => pitch >= 0 && pitch <= 127 &&
+    (!guitar || track.tuning.some((open) => pitch >= open && pitch - open <= 36))
+  function changeGraceOctave(side: GraceSide, index: number, pitch: number) {
+    if (!canPlayGrace(pitch)) return
+    edit((old) => ({ ...old, [side]: old[side]?.map((midi, i) => i === index ? pitch : midi) }))
+  }
+  function addGrace(side: GraceSide) {
+    if (!canPlayGrace(graceToAdd)) { setError('当前定弦无法弹出这个音。'); return }
+    setError('')
+    edit((old) => ({ ...old, [side]: [...old[side] ?? [], graceToAdd] }))
+  }
   const graceControls = !percussion && <>
-    <div className="field-row">
-      <label>{t('倚音音高')}<select value={gracePitch ?? Math.min(127, (current?.midi ?? 60) + 2)}
+    <div className={'field-row' + (mode === 'numbered' ? ' numbered-grace-fields' : '')}>
+      {mode === 'numbered' ? <>
+        <label>{t('倚音音高')}<select value={numberedGrace.degree} onChange={(event) =>
+          setGraceNumber({ degree: Number(event.target.value), octave: graceOctave })}>
+          {[1, 2, 3, 4, 5, 6, 7].map((value) => <option key={value}>{value}</option>)}
+        </select></label>
+        <label>{t('倚音八度')}<select value={graceOctave} onChange={(event) =>
+          setGraceNumber({ degree: numberedGrace.degree, octave: Number(event.target.value) })}>
+          {Array.from({ length: maxGraceOctave - minGraceOctave + 1 }, (_, i) => minGraceOctave + i)
+            .map((octave) => <option key={octave} value={octave}>{octave > 0 ? '+' + octave : octave}</option>)}
+        </select></label>
+      </> : <label>{t('倚音音高')}<select value={gracePitch ?? defaultGracePitch}
         onChange={(event) => setGracePitch(Number(event.target.value))}>
         {Array.from({ length: 128 }, (_, midi) => <option value={midi} key={midi}>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</option>)}
-      </select></label>
-      <button disabled={!current || (beat.grace?.length ?? 0) >= 4} onClick={() => {
-        const pitch = gracePitch ?? Math.min(127, (current?.midi ?? 60) + 2)
-        if (guitar && !track.tuning.some((open) => pitch >= open && pitch - open <= 36)) { setError('当前定弦无法弹出这个音。'); return }
-        setError('')
-        edit((old) => ({ ...old, grace: [...old.grace ?? [], pitch] }))
-      }}>{t('添加前倚音')}</button>
+      </select></label>}
     </div>
-    {beat.grace?.map((midi, index) => <div className="inline small-gap" key={index}>
-      <span>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</span>
-      <button className="danger-action" onClick={() => edit((old) => ({ ...old, grace: old.grace?.filter((_, i) => i !== index) }))}>{t('移除倚音')}</button>
+    {(['grace', 'graceAfter'] as const).map((side) => <div className="field-row grace-side-fields" key={side}>
+      {mode === 'numbered' && <label>{t(side === 'grace' ? '前倚音减时线' : '后倚音减时线')}
+        <select value={beat.graceLines?.[side] ?? 1} disabled={!current} onChange={(event) => {
+          const lines = Number(event.target.value)
+          edit((old) => ({ ...old, graceLines: { ...old.graceLines, [side]: lines } }))
+        }}>
+          {graceLineCounts.map((lines) => <option value={lines} key={lines}>{t('{count} 根', { count: lines })}</option>)}
+        </select></label>}
+      <button disabled={!current || (beat[side]?.length ?? 0) >= maxGraceNotes}
+        onClick={() => addGrace(side)}>{t(side === 'grace' ? '添加前倚音' : '添加后倚音')}</button>
     </div>)}
+    {(['grace', 'graceAfter'] as const).flatMap((side) => (beat[side] ?? []).map((midi, index) => {
+      const { degree, octave, accidental } = numberedPitch(midi + transposition, keySignature)
+      const number = index + 1
+      return <div className="inline small-gap" key={side + index}>
+        {side === 'graceAfter' && <small>{t('后倚音')}</small>}
+        {mode === 'numbered' ? <>
+          <span>{t('{degree} · 八度 {octave}', { degree: (accidental > 0 ? '♯' : accidental < 0 ? '♭' : '') + degree, octave })}</span>
+          <button aria-label={t(side === 'grace' ? '第 {number} 个倚音升八度' : '第 {number} 个后倚音升八度', { number })} disabled={!canPlayGrace(midi + 12)}
+            onClick={() => changeGraceOctave(side, index, midi + 12)}>{t('升八度')}</button>
+          <button aria-label={t(side === 'grace' ? '第 {number} 个倚音降八度' : '第 {number} 个后倚音降八度', { number })} disabled={!canPlayGrace(midi - 12)}
+            onClick={() => changeGraceOctave(side, index, midi - 12)}>{t('降八度')}</button>
+        </> : <span>{pitchNames[midi % 12]}{Math.floor(midi / 12) - 1}</span>}
+        <button className="danger-action" onClick={() => edit((old) => ({ ...old, [side]: old[side]?.filter((_, i) => i !== index) }))}>
+          {t(side === 'grace' ? '移除倚音' : '移除后倚音')}</button>
+      </div>
+    }))}
   </>
   return <section className="inspector editor" hidden={suspended} aria-label={t('录入面板')}>
     <div className="inspector-head">

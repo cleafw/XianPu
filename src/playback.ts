@@ -86,12 +86,19 @@ function trackSounds(timeline: TimedBeat[]) {
     muted += muteStarts.get(timing) ?? 0
     const next = new Map<string, Sound>()
     const grace = beat.notes.length ? beat.grace ?? [] : []
-    const graceStep = grace.length ? Math.min(80, duration * 0.22 / grace.length) : 0
-    for (const [i, pitch] of grace.entries()) {
-      const start = time + i * graceStep
-      sounds.push({ midi: pitch, start, end: start + graceStep, release: start + graceStep, velocity: velocityLimit(level * 0.8) })
+    const graceAfter = beat.notes.length ? beat.graceAfter ?? [] : []
+    const step = (count: number) => count ? Math.min(80, duration * 0.22 / count) : 0
+    const beforeStep = step(grace.length)
+    const afterStep = step(graceAfter.length)
+    function addGrace(pitches: number[], from: number, step: number) {
+      for (const [i, pitch] of pitches.entries()) {
+        const start = from + i * step
+        sounds.push({ midi: pitch, start, end: start + step, release: start + step, velocity: velocityLimit(level * 0.8) })
+      }
     }
-    const onset = time + grace.length * graceStep
+    const onset = time + grace.length * beforeStep
+    const end = time + duration - graceAfter.length * afterStep
+    addGrace(grace, time, beforeStep)
     for (const note of beat.notes) {
       const key = note.string ? 's' + note.string : 'm' + note.midi
       const prior = previous.get(key)
@@ -111,7 +118,6 @@ function trackSounds(timeline: TimedBeat[]) {
         slide ||= effect.slide
         bend ||= effect.bend
       }
-      const end = time + duration
       const release = Math.min(end, onset + Math.max(1, (end - onset) * gate))
       if (adjacent && beat.tie && prior.midi === note.midi) {
         prior.end = end
@@ -125,6 +131,7 @@ function trackSounds(timeline: TimedBeat[]) {
       sounds.push(sound)
       next.set(key, sound)
     }
+    addGrace(graceAfter, end, afterStep)
     previous = next
     if (beat.marks?.some(({ code, string }) => code === 'fp' && string === undefined)) {
       base = dynamics.p!

@@ -222,7 +222,7 @@ test('finds the two flute run signs by alias and prints the same graphics and gr
   await search.fill('小音符')
   await editor.getByText('录入小音符（倚音）', { exact: true }).click()
   const pitch = editor.getByRole('combobox', { name: '倚音音高' })
-  for (const value of ['60', '69', '71']) {
+  for (const value of ['1', '6', '7']) {
     await pitch.selectOption(value)
     await editor.getByRole('button', { name: '添加前倚音' }).click()
   }
@@ -233,6 +233,43 @@ test('finds the two flute run signs by alias and prints the same graphics and gr
   await expect(paper.locator('[data-code=fluteRunUp] path')).toHaveAttribute('d', upPath!)
   await expect(paper.locator('[data-code=fluteRunDown] path')).toHaveAttribute('d', downPath!)
   await expect(paper.locator('[data-code=arpeggioUp] path')).toHaveCount(1)
+})
+
+test('enters and changes numbered grace notes by degree and octave in the current key', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.measures[1] = { key: 1 }
+  project.tracks[0].bars[1] = [{ ...blank(), draft: false, notes: [{ midi: 67 }] }]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'numbered-grace.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  await entry.getByRole('button', { name: /^第 2 小节，/ }).click()
+  const editor = page.getByRole('region', { name: '录入面板' })
+  await editor.getByRole('button', { name: '倚音与成组连音', exact: true }).click()
+  const pitch = editor.getByRole('combobox', { name: '倚音音高' })
+  const octave = editor.getByRole('combobox', { name: '倚音八度' })
+  await expect(pitch.locator('option')).toHaveText(['1', '2', '3', '4', '5', '6', '7'])
+  await pitch.selectOption('2')
+  await octave.selectOption('1')
+  await editor.getByRole('button', { name: '添加前倚音' }).click()
+  await expect(editor.getByText('2 · 八度 1', { exact: true })).toBeVisible()
+  await pitch.selectOption('1')
+  await octave.selectOption('-1')
+  await editor.getByRole('button', { name: '添加前倚音' }).click()
+  const readGrace = async () => {
+    const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+    return parseProject(draft).tracks[0].bars[1][0].grace
+  }
+  expect(await readGrace()).toEqual([81, 55])
+  await editor.getByRole('button', { name: '第 1 个倚音降八度' }).click()
+  await editor.getByRole('button', { name: '第 2 个倚音升八度' }).click()
+  expect(await readGrace()).toEqual([69, 67])
+
+  await page.getByRole('combobox', { name: '谱式' }).selectOption('staff')
+  await expect(pitch.locator('option[value="69"]')).toHaveText('A4')
+  await expect(octave).toHaveCount(0)
 })
 
 test('shows one numbered key per change and lets overlapping spacing and part labels be edited', async ({ page }) => {
