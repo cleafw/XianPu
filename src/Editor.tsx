@@ -114,9 +114,12 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
     ] }))
     setFret('')
   }
-  function degree(value: number) {
+  function degree(value: number, preserveOctave = false) {
     if (!value) rest()
-    else putPitch(midiForDegree(value, keySignature, entry.octave, entry.accidental ?? 0) - transposition)
+    else {
+      const octave = preserveOctave && current && !addToBeat ? octaveOf(current.midi) : entry.octave
+      putPitch(midiForDegree(value, keySignature, 0, entry.accidental ?? 0) + octave * 12 - transposition)
+    }
   }
   const staffPitch = (name: string) => {
     const degreeByLetter = 'cdefgab'.indexOf(name)
@@ -168,7 +171,7 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
         else previous()
       } else if (!percussion && !tab && !staff && /^[0-7]$/.test(key)) {
         event.preventDefault()
-        degree(Number(key))
+        degree(Number(key), true)
       } else if (staff && /^[a-g]$/.test(key)) {
         event.preventDefault()
         putPitch(staffPitch(key) - transposition)
@@ -251,6 +254,7 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
       <span className="eyebrow">{t('当前录入')}</span>
       <strong>{track.name === notation ? notation : track.name + ' · ' + notation}</strong>
       <small>{t('第 {bar} 小节 · 位置 {beat}', { bar: position.bar + 1, beat: position.beat + 1 })}</small>
+      {position.extension && <small>{t('第 {number} 根增时线', { number: position.extension })}</small>}
       {mode === 'numbered' && <button aria-pressed={stackNotes} onClick={() => setStackNotes(!stackNotes)}>{t('简谱叠音录入')}</button>}
     </div>
     <div className="inspector-body">
@@ -266,7 +270,8 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
         <button title="]" disabled={!canStep('lengthen')} onClick={() => stepRhythm('lengthen')}>{t(mode === 'numbered' ? '去减时线' : '延长时值')}</button>
         {mode === 'numbered' && <>
           <button disabled={!canStep('add-extension')} onClick={() => stepRhythm('add-extension')}>{t('加增时线')}</button>
-          <button disabled={!canStep('remove-extension')} onClick={() => stepRhythm('remove-extension')}>{t('去增时线')}</button>
+          <button disabled={!position.extension && !canStep('remove-extension')} onClick={() =>
+            position.extension ? deleteNotes() : stepRhythm('remove-extension')}>{t('去增时线')}</button>
         </>}
       </div>
       </ToolPanel>

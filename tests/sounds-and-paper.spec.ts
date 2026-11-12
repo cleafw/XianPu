@@ -1,4 +1,61 @@
 import { expect, test } from '@playwright/test'
+import { blank, createProject, parseProject } from '../src/model'
+
+test('fills the available A4 page height by default and keeps explicit system limits', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.layout = { barsPerLine: 1, systemsPerPage: 3 }
+  project.measures = Array.from({ length: 30 }, () => ({}))
+  project.tracks[0].bars = project.measures.map(() =>
+    [{ ...blank(1), draft: false, notes: [{ midi: 60 }] }])
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'legacy-three-systems.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const limit = page.getByLabel('每页谱行')
+  await expect(limit).toHaveValue('0')
+  const exportButton = page.getByRole('button', { name: '导出', exact: true })
+  await exportButton.click()
+  const dialog = page.getByRole('dialog')
+  const sheets = dialog.locator('.print-page')
+  await expect(sheets.nth(1)).toBeVisible()
+  const pages = await sheets.evaluateAll((pages) => pages.map((paper) => {
+    const box = paper.getBoundingClientRect()
+    const bottom = paper.querySelector(':scope > svg:last-of-type')!.getBoundingClientRect().bottom
+    const systems = [...paper.querySelectorAll(':scope > svg')].filter((svg) =>
+      svg.querySelector('text[style*="dominant-baseline: middle"]')).length
+    return { filled: (bottom - box.top) / box.height, systems }
+  }))
+  expect(pages.length).toBeLessThan(10)
+  expect(pages[0].systems).toBeGreaterThan(3)
+  for (const sheet of pages.slice(0, -1)) expect(sheet.filled).toBeGreaterThan(0.83)
+  expect(pages.reduce((total, sheet) => total + sheet.systems, 0)).toBe(30)
+  const pdf = await page.pdf({ preferCSSPageSize: true })
+  expect(pdf.toString('latin1').match(/\/Type \/Page\b/g)).toHaveLength(pages.length)
+
+  const png = await sheets.first().evaluate(async (paper) => {
+    const { renderPng } = await import('/src/exportImage.ts') as typeof import('../src/exportImage')
+    const image = await createImageBitmap(await renderPng(paper as HTMLElement))
+    const canvas = document.createElement('canvas')
+    canvas.width = image.width
+    canvas.height = image.height
+    const context = canvas.getContext('2d')!
+    context.drawImage(image, 0, 0)
+    const start = Math.floor(image.height * 0.76)
+    const data = context.getImageData(0, start, image.width, Math.floor(image.height * 0.13)).data
+    const hasInk = data.some((value, index) => index % 4 === 0 && value < 100)
+    return { hasInk, ratio: image.width / image.height }
+  })
+  expect(png.hasInk).toBe(true)
+  expect(png.ratio).toBeCloseTo(210 / 297, 2)
+
+  await dialog.getByRole('button', { name: '关闭' }).click()
+  await limit.selectOption('3')
+  const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+  expect(parseProject(draft).layout.pageSystemLimit).toBe(3)
+  await exportButton.click()
+  await expect(sheets).toHaveCount(10)
+})
 
 test('assigns distinct NeuralNote sounds and plays the score with the bundled bank', async ({ page }) => {
   await page.addInitScript(() => {

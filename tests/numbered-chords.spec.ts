@@ -679,6 +679,53 @@ test('copies a continuous note range with unfilled beats and an empty measure in
   await expect(page.getByRole('status')).not.toContainText('超出拍数')
 })
 
+test('keyboard replacement keeps the existing low and high octaves', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  project.tracks[0].bars[0] = [57, 81, 60].map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] }))
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'replace-octaves.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  await entry.getByRole('button', { name: '简谱位置 1', exact: true }).click()
+  await page.keyboard.press('5')
+  await page.keyboard.press('5')
+  const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+  expect(parseProject(draft).tracks[0].bars[0].map(({ notes }) => notes[0]?.midi)).toEqual([55, 79, 60])
+})
+
+test('pastes two eighth notes over exactly one quarter in the middle of a bar', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  const track = project.tracks[0]
+  track.bars[0] = [60, 62].map((midi) => ({ ...blank(8), draft: false, notes: [{ midi }] }))
+  track.bars[1] = [64, 65, 67, 69].map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] }))
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'overwrite-quarter.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  const beat = (index: number) => entry.getByRole('button', { name: '简谱位置 ' + index, exact: true })
+  await beat(1).click()
+  await beat(2).click({ modifiers: ['Shift'] })
+  await page.keyboard.press('Control+c')
+  await entry.getByRole('button', { name: /^第 2 小节，/ }).click()
+  for (const index of [1, 2, 3]) {
+    await beat(index).click()
+    await page.keyboard.press('Control+v')
+    await expect(beat(5)).toBeVisible()
+    const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+    expect(parseProject(draft).tracks[0].bars[1].map(({ notes, duration }) => [notes[0]?.midi, duration])).toEqual([
+      ...track.bars[1].slice(0, index - 1).map(({ notes }) => [notes[0].midi, 4]),
+      [60, 8], [62, 8],
+      ...track.bars[1].slice(index).map(({ notes }) => [notes[0].midi, 4]),
+    ])
+    await page.keyboard.press('Control+z')
+    await expect(beat(5)).toHaveCount(0)
+  }
+})
+
 test('pastes a beamed eighth-note pair into the final quarter-note position as two notes', async ({ page }) => {
   const project = createProject('song')
   project.tracks = project.tracks.slice(0, 1)

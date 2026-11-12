@@ -132,3 +132,22 @@ test('pasting mixed note lengths advances by time even when a blank bar has unus
   assert.deepEqual(pasteSelectedNotes(project, { ...source, bar: 2, beat: 3 }, clip), { error: 'barline' })
   assert.deepEqual(track.bars[2], [])
 })
+
+test('a time overwrite keeps the uncovered portion of a beat and subsequent notes in place', () => {
+  const project = createProject('song')
+  const track = project.tracks[0]
+  const note = (midi: number, duration: 4 | 8) => ({ ...blank(duration), draft: false, notes: [{ midi }] })
+  track.bars[0] = [note(60, 8), note(67, 4)]
+  track.bars[1] = [note(65, 4), note(69, 4), note(71, 4), note(72, 4)]
+  const source = { track: track.id, bar: 0, beat: 0 }
+  const target = { ...source, bar: 1 }
+  const pitches = (score: typeof project) => score.tracks[0].bars[1].map(({ notes, duration }) => [notes[0].midi, duration])
+  const eighth = copySelectedNotes(project, selectedBeats(project, [source]), track)
+  const partial = pasteSelectedNotes(project, target, eighth)
+  assert.ok('score' in partial)
+  assert.deepEqual(pitches(partial.score), [[60, 8], [65, 8], [69, 4], [71, 4], [72, 4]])
+  const quarter = copySelectedNotes(project, selectedBeats(project, [{ ...source, beat: 1 }]), track)
+  const recombined = pasteSelectedNotes(partial.score, target, quarter)
+  assert.ok('score' in recombined)
+  assert.deepEqual(pitches(recombined.score), [[67, 4], [69, 4], [71, 4], [72, 4]])
+})

@@ -1,5 +1,5 @@
 import { AlphaTabApi, midi, PlayerMode, PlayerOutputMode, type synth } from '@coderline/alphatab'
-import { beatList, capacity, measureSettings, ticks, voiceBars, type Beat, type Meter, type Position, type Project, type Tone } from './model'
+import { beatList, capacity, measureSettings, numberedExtensions, numberedExtensionTicks, ticks, voiceBars, type Beat, type Meter, type Position, type Project, type Tone } from './model'
 import { articulation, dynamics, pairedSpans } from './notationMarks'
 import { scoreSettings } from './score'
 import { resolveScoreNavigation } from './scoreNavigation'
@@ -18,6 +18,16 @@ export function stopPlayback() {
   removeProgress = undefined
   done = undefined
   player?.stop()
+}
+
+export function pausePlayback() {
+  player?.pause()
+}
+
+export function resumePlayback() {
+  if (!player || !done) return false
+  player.output.activate()
+  return player.play()
 }
 
 export function playbackOrder(project: Project) {
@@ -191,10 +201,16 @@ function buildPlayback(project: Project, part: string | null, follow?: Position)
     if (cursorTrack && follow) {
       const voice = cursorTrack.id === follow.track ? follow.voice : 0
       const bars = voiceBars(cursorTrack, voice)
+      const mode = part ? cursorTrack.layout.mode ?? cursorTrack.mode : cursorTrack.mode
+      const numbered = mode === 'numbered' || mode === 'staff-numbered' && follow.lane !== 'staff'
       let tick = start
       for (const [beat, item] of beatList(project, bars[index], index).entries()) {
-        points.push({ tick, position: { track: cursorTrack.id, bar: index, beat, voice, lane: follow.lane } })
+        const position: Position = { track: cursorTrack.id, bar: index, beat, voice, lane: follow.lane }
+        points.push({ tick, position })
         if (source !== index) break
+        if (numbered) for (let extension = 1; extension <= numberedExtensions(item); extension++) {
+          points.push({ tick: tick + extension * numberedExtensionTicks, position: { ...position, extension } })
+        }
         tick += ticks(item)
       }
     }
@@ -213,7 +229,8 @@ function buildPlayback(project: Project, part: string | null, follow?: Position)
     previousBar = index
   }
 
-  const first = follow ? points.findIndex(({ position }) => position.bar === follow.bar && position.beat === follow.beat) : 0
+  const first = follow ? points.findIndex(({ position }) =>
+    position.bar === follow.bar && position.beat === follow.beat && position.extension === follow.extension) : 0
   if (first < 0) throw new Error('所选位置不在试听路线中。')
   const startTick = points[first]?.tick ?? 0
   const priorTiming = new Map<number, typeof timing[number]>()

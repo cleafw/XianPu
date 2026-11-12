@@ -18,14 +18,14 @@ import { NavigationEditor, navigationMessage } from './NavigationEditor'
 import { resolveScoreNavigation } from './scoreNavigation'
 import { paperDimensions, paperMargin } from './paper'
 import { beatList, beatRange, blank, changeBeat, changeMeasures, clearMeasureContents, createProject, createTrack, defaultWatermarkStyle, extendNumberedBeat, keyNames, kinds, measureDifference, measureSettings, modes, paperFor, parseProject,
-  pitchNames, techniqueGroups, ticks, trackGapLimits, voiceBars, watermarkLimits, watermarkMaxLength,
+  numberedExtensions, pageSystemLimitFor, pitchNames, techniqueGroups, ticks, trackGapLimits, voiceBars, watermarkLimits, watermarkMaxLength,
   type Beat, type IntroRange, type Kind, type Layout, type Measure, type Mode, type Position, type Project, type ScoreLabelKind, type Track, type WatermarkStyle } from './model'
-import { playScore, stopPlayback } from './playback'
+import { pausePlayback, playScore, resumePlayback, stopPlayback } from './playback'
 import { copyMeasures, pasteMeasures, type MeasureClipboard, type PasteMode } from './measureClipboard'
 import * as storage from './storage'
 import { importMidi, maxMidiBytes } from './midiImport'
 import { changeKeySignature, type KeyChangeError, type KeyChangeMode } from './keyChange'
-import { clearSelectedNotes, convertNotesToGrace, copySelectedNotes, editRhythmSelection, pasteSelectedNotes, resetSelectedNotes, sameBeat, sameVoice, selectedBeats, shiftSelectedPitches, type NoteClipboard } from './noteSelection'
+import { clearSelectedNotes, convertNotesToGrace, copySelectedNotes, editRhythmSelection, pasteSelectedNotes, removeNumberedExtension, resetSelectedNotes, sameBeat, sameVoice, selectedBeats, shiftSelectedPitches, type NoteClipboard } from './noteSelection'
 import './styles.css'
 
 type History = { past: Project[]; value: Project | null; future: Project[] }
@@ -104,7 +104,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [midiWarnings, setMidiWarnings] = useState<TextKey[]>([])
   const [error, setError] = useState<Message | null>(null)
   const [playhead, setPlayhead] = useState<Position | null>(null)
-  const [audioState, setAudioState] = useState<'idle' | 'loading' | 'playing'>('idle')
+  const [audioState, setAudioState] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle')
+  const playbackStart = useRef<Position | null>(null)
   const [panel, setPanel] = useState<'settings' | 'intro' | 'export' | 'track' | 'paper' | 'sounds' | 'remove-part' | 'midi-report' | null>(null)
   const [keyChangeMode, setKeyChangeMode] = useState<KeyChangeMode>('pitch')
   const [keyChangeError, setKeyChangeError] = useState<{ reason: KeyChangeError; bar?: number }>()
@@ -148,6 +149,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const position: Position = { track: track?.id ?? '', bar: barIndex, beat: Math.min(selection.beat, Math.max(0, beats.length - 1)),
     lane: track?.id === selection.track ? selection.lane : undefined, voice: activeVoice, note: selection.note, string: selection.string }
   const beat = beats[position.beat] ?? blank()
+  if (track?.id === selection.track && selection.extension && selection.extension <= numberedExtensions(beat)) position.extension = selection.extension
   const mode = track ? activePart ? track.layout.mode ?? track.mode : track.mode : 'numbered'
   const entryMode = mode === 'staff-tab' && position.lane === 'staff' ? 'staff'
     : mode === 'staff-numbered' ? position.lane === 'numbered' ? 'numbered' : 'staff' : mode
@@ -164,11 +166,15 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const canDeleteFromEnd = validMeasureCount && measureCount < measureTotal
   const canDeleteFromSelection = canDeleteFromEnd && deleteStart + measureCount <= measureTotal
   const noteTargets = project ? selectedBeats(project, selectedNotes) : []
+  const auditionPosition = noteTargets[0]?.position ?? position
+  const previousAudition = playbackStart.current
+  const canResumeAudition = previousAudition && sameBeat(previousAudition, auditionPosition) &&
+    previousAudition.extension === auditionPosition.extension && previousAudition.lane === auditionPosition.lane
   const spanSelection = noteTargets.length > 1
     ? noteTargets.every(({ position }) => sameVoice(position, noteTargets[0].position))
       ? [noteTargets[0].position, noteTargets.at(-1)!.position] as const : null
     : undefined
-  const copyTargets = !project || measureSelection.length ? [] : noteTargets.length ? noteTargets
+  const copyTargets = !project || measureSelection.length || position.extension ? [] : noteTargets.length ? noteTargets
     : beat.draft ? [] : selectedBeats(project, [position])
   const measureDrag = useMeasureDrag(({ clientX, clientY }, doc) => measureButton(doc.elementFromPoint(clientX, clientY)), selectMeasureRange)
 
@@ -401,6 +407,13 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       }
       const target = eventElement(event.target)
       const textInput = target?.matches('input, textarea, select') || target?.isContentEditable
+      if (event.key === ' ' && project && track && !panel && !confirm && !pasteWarning && !barMenu && !busy &&
+        !textInput && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
+        (!target?.closest('button, summary, a') || target.closest('.beat-row button, [data-measure-index], [data-audition]'))) {
+        event.preventDefault()
+        if (!event.repeat) void togglePlay(true)
+        return
+      }
       if (event.key === 'Delete' && project && track && !panel && !confirm && !pasteWarning && !barMenu &&
         !busy && !textInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
         event.preventDefault()
@@ -443,9 +456,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     setSelection((current) => {
       if (step < 0 && position.beat === 0) {
         if (!position.bar) return position
-        return { ...position, bar: position.bar - 1, beat: beatList(project, voiceBars(track, activeVoice)[position.bar - 1], position.bar - 1).length - 1 }
+        return { ...position, extension: undefined, bar: position.bar - 1, beat: beatList(project, voiceBars(track, activeVoice)[position.bar - 1], position.bar - 1).length - 1 }
       }
-      return { ...current, ...position, beat: position.beat + step, note: undefined, string: undefined, editDraftRest: undefined }
+      return { ...current, ...position, beat: position.beat + step, note: undefined, string: undefined, extension: undefined, editDraftRest: undefined }
     })
   }
   // A newly entered duration can shrink the list. Advance to the next measure
@@ -503,6 +516,14 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }
   function deleteNotes() {
     if (!project) return
+    if (position.extension) {
+      const score = removeNumberedExtension(project, position)
+      setBarMenu(null)
+      if (score === project) return
+      commit(() => score)
+      selectBeat({ ...position, extension: undefined })
+      return
+    }
     if (noteTargets.length || entryMode === 'numbered' && position.note !== undefined) {
       const targets = noteTargets.length ? noteTargets : selectedBeats(project, [position])
       const cleared = clearSelectedNotes(project, targets)
@@ -593,7 +614,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     }
     setBarMenu(null)
     setSelectedBars(next)
-    setSelection({ ...target, beat: 0, note: undefined, string: undefined })
+    setSelection({ ...target, beat: 0, note: undefined, string: undefined, extension: undefined })
   }
   function selectMeasureRange(start: Position, end: number) {
     clearNoteSelection()
@@ -643,7 +664,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   function showClipboardMenu(target: Position, event: MouseEvent, kind: 'measure' | 'note') {
     event.preventDefault()
     if (kind === 'note') {
-      if (!noteTargets.some(({ position, notes }) => sameBeat(position, target) && (!notes || target.note === undefined || notes.has(target.note)))) {
+      if (target.extension || !noteTargets.some(({ position, notes }) => sameBeat(position, target) && (!notes || target.note === undefined || notes.has(target.note)))) {
         selectBeat(target, true)
       }
     } else if (!measureSelection.includes(target.bar) || !sameVoice(target, position)) {
@@ -958,15 +979,31 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       setPrintJob(null)
     }
   }
-  async function togglePlay() {
+  async function togglePlay(usePause = false) {
     if (!project) return
-    if (audioState !== 'idle') { stopPlayback(); setAudioState('idle'); setPlayhead(null); return }
+    if (usePause && audioState === 'playing') {
+      pausePlayback()
+      setAudioState('paused')
+      return
+    }
+    if (audioState === 'paused') {
+      if (canResumeAudition && resumePlayback()) {
+        setAudioState('playing')
+        return
+      }
+    } else if (audioState !== 'idle') {
+      stopPlayback()
+      setAudioState('idle')
+      setPlayhead(null)
+      return
+    }
     const problem = resolveScoreNavigation(project.measures).diagnostics[0]
     if (problem) { setError(message('无法试听。', undefined, navigationMessage(t, language, problem))); return }
     try {
       setAudioState('loading')
-      const start = noteTargets[0]?.position ?? position
-      await playScore(project, activePart, () => { setAudioState('idle'); setPlayhead(null) }, () => setAudioState('playing'), start, setPlayhead)
+      setPlayhead(null)
+      playbackStart.current = auditionPosition
+      await playScore(project, activePart, () => { setAudioState('idle'); setPlayhead(null) }, () => setAudioState('playing'), auditionPosition, setPlayhead)
     }
     catch (cause) { setAudioState('idle'); setPlayhead(null); setError(message('无法试听。', undefined, cause)) }
   }
@@ -1007,7 +1044,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           disabled={busy} onChange={(event) => setPreference(event.target.value as LanguagePreference)}>
           <option value="system">{t('跟随系统')}</option><option value="zh" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option>
         </select>{project ? <>
-          <button className="quiet" aria-busy={audioState === 'loading'} onClick={() => void togglePlay()}>{audioState !== 'idle' ? '■ ' + t('停止') : '▶ ' + t('试听')}</button>
+          <button className="quiet" data-audition aria-keyshortcuts="Space" aria-busy={audioState === 'loading'} onClick={() => void togglePlay()}>
+            {audioState === 'paused' ? '▶ ' + t('继续试听') : audioState === 'idle' ? '▶ ' + t('试听') : '■ ' + t('停止')}
+          </button>
           <button className="primary" onClick={showExport}>{t('导出')}</button>
         </> : <span className="tag">{t('离线写谱工作台')}</span>}
           <a className="contact-link quiet" href={creatorPage} target="_blank" rel="noopener noreferrer"
@@ -1077,11 +1116,14 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
                 .map(([key, value]) => <option key={key} value={key}>{t(value)}</option>)}</select></label>
               <label>{t('每行小节')}<select value={viewLayout!.barsPerLine} onChange={(e) => patchLayout({ barsPerLine: Number(e.target.value) })}>
                 {Array.from({ length: 12 }, (_, i) => <option key={i + 1}>{i + 1}</option>)}</select></label>
-              <label>{t('每页谱行')}<select value={viewLayout!.systemsPerPage} onChange={(e) => patchLayout({ systemsPerPage: Number(e.target.value) })}>
+              <label>{t('每页谱行')}<select value={pageSystemLimitFor(viewLayout!)} onChange={(e) => patchLayout({ pageSystemLimit: Number(e.target.value) })}>
+                <option value="0">{t('按纸张自动分页')}</option>
                 {Array.from({ length: 6 }, (_, i) => <option key={i + 1}>{i + 1}</option>)}</select></label>
               <label>{t('缩放')}<select value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>{[75, 90, 100, 125, 150].map((n) => <option key={n} value={n}>{n}%</option>)}</select></label></div></div>
           <div className="paper-scroll"><div className="paper" style={{ width: page.width * zoom / 100 + 'mm', paddingInline: paperMargin * zoom / 100 + 'mm' }}>
-            <ScoreView key={projectSession.current} project={project} part={activePart} position={position} playhead={audioState === 'playing' ? playhead : null} selectedBars={measureSelection} selectedNotes={selectedNotes} scale={zoom / 100} onSelect={(target) => selectBeat(target, true)}
+            <ScoreView key={projectSession.current} project={project} part={activePart} position={position}
+              playhead={audioState === 'playing' || audioState === 'paused' && canResumeAudition ? playhead : null} paused={audioState === 'paused'}
+              selectedBars={measureSelection} selectedNotes={selectedNotes} scale={zoom / 100} onSelect={(target) => selectBeat(target, true)}
               onNoteSelect={selectNote} onNoteRange={selectNoteRange}
               onLabelSelect={openScoreLabel} onBarSelect={selectMeasure} onBarRange={selectMeasureRange} onClipboardMenu={showClipboardMenu} onError={(cause) => setError(message('谱面绘制失败。', undefined, cause))} />
           </div></div>
@@ -1196,7 +1238,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     </div>
     {barMenu && createPortal(<div className="bar-menu-layer" onPointerDown={() => setBarMenu(null)} onKeyDown={(event) => { if (event.key === 'Escape') setBarMenu(null) }}>
       <div className="bar-menu" role="group" aria-label={t(barMenu.kind === 'note' ? '音符编辑' : '小节操作')} style={{ left: barMenu.x, top: barMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
-        {barMenu.kind === 'note' ? <>
+        {barMenu.kind === 'note' && barMenu.position.extension ? <>
+          <button autoFocus className="danger-action" onClick={deleteNotes}>{t('去增时线')}</button>
+        </> : barMenu.kind === 'note' ? <>
           <button autoFocus disabled={!copyTargets.length} onClick={copyNotes}>{t('复制所选音符')}</button>
           <button disabled={!noteClipboard} onClick={() => pasteNotes(barMenu.position)}>{t('粘贴音符')}</button>
           {entryMode === 'numbered' && <>

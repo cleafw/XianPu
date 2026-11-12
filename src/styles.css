@@ -245,6 +245,7 @@ body.tool-popup { height: 100vh; overflow: auto; scrollbar-gutter: stable; backg
 
 .score-frame { position: relative; }
 .score-cursor.is-playing { background: #2d7cd75e; outline-color: #235994; }
+.score-cursor.is-paused { background: #2d7cd733; outline: 1px dashed #235994; }
 .score-cursor, .score-note-highlight { position: absolute; width: 16px; border-radius: 5px; background: #2f9b7660; outline: 1px solid #257963; pointer-events: none; z-index: 2; }
 .rhythm { display: grid; grid-template-columns: repeat(3, 1fr); }
 .print-render-source { position: absolute; left: -10000px; top: 0; width: calc(var(--paper-width) - 2 * var(--paper-margin)); }

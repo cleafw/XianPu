@@ -30,9 +30,10 @@ function isMeasureNumber(target: EventTarget | null, bar: number) {
   return text?.textContent === String(bar + 1) && /c80000|200,\s*0,\s*0/i.test(text.getAttribute('fill') ?? '')
 }
 
-export function ScoreView({ project, part, position, playhead, selectedBars = [], selectedNotes = [], scale = 1, print = false, onSelect, onNoteSelect, onNoteRange, onLabelSelect, onBarSelect, onBarRange, onClipboardMenu, onReady, onError }: {
+export function ScoreView({ project, part, position, playhead, paused = false, selectedBars = [], selectedNotes = [], scale = 1, print = false, onSelect, onNoteSelect, onNoteRange, onLabelSelect, onBarSelect, onBarRange, onClipboardMenu, onReady, onError }: {
   project: Project; part: string | null; position?: Position; playhead?: Position | null; selectedBars?: number[]; scale?: number; print?: boolean; onSelect?: (position: Position) => void;
   selectedNotes?: Position[]; onNoteSelect?: (position: Position, event: MouseEvent) => void;
+  paused?: boolean;
   onNoteRange?: (start: Position, end: Position) => void;
   onBarSelect?: (position: Position, event: MouseEvent) => void;
   onBarRange?: (start: Position, end: number) => void;
@@ -45,10 +46,11 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
   const cursor = useRef<HTMLDivElement>(null)
   const highlights = useRef<HTMLDivElement>(null)
   const stackGlyphs = useRef(new Map<number, SVGTextElement>())
+  const extensionGlyphs = useRef(new Map<number, Map<number, SVGRectElement>>())
   const apiRef = useRef<AlphaTabApi | null>(null)
   const pendingScroll = useRef<ScoreScroll | null>(null)
-  const callbacks = useRef({ onReady, onError, position, playhead, selectedBars, selectedNotes })
-  callbacks.current = { onReady, onError, position, playhead, selectedBars, selectedNotes }
+  const callbacks = useRef({ onReady, onError, position, playhead, paused, selectedBars, selectedNotes })
+  callbacks.current = { onReady, onError, position, playhead, paused, selectedBars, selectedNotes }
 
   function positionAt(event: { clientX: number; clientY: number }, doc = container.current?.ownerDocument): (Position & { noteHit: boolean }) | undefined {
     const lookup = apiRef.current?.boundsLookup
@@ -60,6 +62,21 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     const system = lookup.staffSystems.find(({ realBounds: bounds }) => y >= bounds.y && y <= bounds.y + bounds.h)
     const master = system?.findBarAtPos(x)
     if (!master) return
+
+    for (const staff of master.bars) {
+      const track = part ? project.tracks.find((item) => item.id === part) : project.tracks[staff.bar.staff.track.index]
+      if (!track) continue
+      const mode = part ? track.layout.mode ?? track.mode : track.mode
+      const lane = entryLane(master, staff, mode)
+      if (mode !== 'numbered' && lane !== 'numbered') continue
+      for (const { beat } of staff.beats) for (const [extension, glyph] of extensionGlyphs.current.get(beat.id) ?? []) {
+        const box = glyph.getBoundingClientRect()
+        if (event.clientX < box.left - 3 || event.clientX > box.right + 3 ||
+          event.clientY < box.top - 7 || event.clientY > box.bottom + 7) continue
+        return { track: track.id, bar: staff.bar.index, beat: scoreBeatIndex(beat), lane, extension,
+          voice: voiceIndices(track, mode, staff.bar.staff.index, lane)[beat.voice.index] ?? 0, noteHit: true }
+      }
+    }
 
     const hit = doc?.elementFromPoint(event.clientX, event.clientY)?.closest('g[class^="xianpu-stack-note-"]')
     let stackId = hit ? Number(hit.getAttribute('class')!.slice('xianpu-stack-note-'.length)) : undefined
@@ -148,7 +165,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     return { master, staff, lane, bounds, lastBeat: bounds === beats.at(-1) }
   }
 
-  function cursorBox(visual: StaffBar['visualBounds'], x: number) {
+  function cursorBox(visual: Pick<StaffBar['visualBounds'], 'y' | 'h'>, x: number) {
     const top = visual.y - 3
     return { left: x - 8, right: x + 8, top, bottom: top + Math.max(visual.h + 6, 18) }
   }
@@ -232,13 +249,18 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
     marker.hidden = !bounds && !simile || !active && !!callbacks.current.selectedNotes.length
     if (bounds || simile) {
       const visual = bounds?.visualBounds ?? staff?.visualBounds ?? master!.visualBounds
-      const frame = (!active && bounds && lane !== 'staff' && lane !== 'tab' && stackFrame(selected, bounds)) ||
-        cursorBox(visual, bounds?.onNotesX ?? visual.x + visual.w / 2)
+      const dash = bounds && selected.extension ? extensionGlyphs.current.get(bounds.beat.id)?.get(selected.extension) : undefined
+      const dashBox = dash?.getBoundingClientRect()
+      const surface = dash?.closest('.at-surface')?.getBoundingClientRect()
+      const frame = dashBox && surface
+        ? cursorBox({ y: dashBox.y - surface.y - 7, h: 14 }, dashBox.x - surface.x + dashBox.width / 2)
+        : (!active && bounds && lane !== 'staff' && lane !== 'tab' && stackFrame(selected, bounds)) ||
+          cursorBox(visual, bounds?.onNotesX ?? visual.x + visual.w / 2)
       marker.style.left = frame.left + 'px'
       marker.style.width = frame.right - frame.left + 'px'
       marker.style.top = frame.top + 'px'
       marker.style.height = frame.bottom - frame.top + 'px'
-      if (active) {
+      if (active && !callbacks.current.paused) {
         const viewport = marker.closest('.canvas')
         const paper = marker.closest('.paper-scroll')
         const cursor = marker.getBoundingClientRect()
@@ -280,6 +302,15 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
         restoreScroll()
         stackGlyphs.current = new Map([...element.querySelectorAll<SVGTextElement>('g[class^="xianpu-stack-note-"] > text')]
           .map((glyph) => [Number(glyph.parentElement!.getAttribute('class')!.slice('xianpu-stack-note-'.length)), glyph]))
+        extensionGlyphs.current = new Map()
+        for (const glyph of element.querySelectorAll<SVGRectElement>('g[class^="xianpu-extension-"] > rect')) {
+          const match = glyph.parentElement?.getAttribute('class')?.match(/^xianpu-extension-(\d+)-(\d+)$/)
+          if (!match) continue
+          const id = Number(match[1])
+          const offsets = extensionGlyphs.current.get(id) ?? new Map<number, SVGRectElement>()
+          offsets.set(Number(match[2]), glyph)
+          extensionGlyphs.current.set(id, offsets)
+        }
         if (onLabelSelect) for (const label of element.querySelectorAll('[data-score-label-kind]')) {
           label.setAttribute('role', 'button')
           label.setAttribute('tabindex', '0')
@@ -304,7 +335,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
       reportError(error instanceof Error ? error : new Error(String(error)))
     }
   }, [project, part, scale, language, print])
-  useEffect(markPosition, [position, playhead, selectedBars, selectedNotes])
+  useEffect(markPosition, [position, playhead, paused, selectedBars, selectedNotes])
   return <div className="score-frame">
     <div ref={container} className="score-render" data-testid="score-render"
       {...drag.handlers} aria-label={t('可点击的乐谱')} onPointerDown={onSelect ? (event) => {
@@ -312,6 +343,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
         if (selectLabel(event.target)) return
         const target = positionAt(event)
         if (!target) return
+        if (target.extension) { onSelect(target); return }
         const isBarNumber = isMeasureNumber(event.target, target.bar)
         const modifier = event.shiftKey || event.ctrlKey || event.metaKey
         const note = target.noteHit && !isBarNumber
@@ -330,6 +362,7 @@ export function ScoreView({ project, part, position, playhead, selectedBars = []
         onClipboardMenu(target, event, kind)
       } : undefined} />
     {position && <div ref={highlights} aria-hidden="true" />}
-    {position && <div ref={cursor} className={'score-cursor' + (playhead ? ' is-playing' : '')} data-play-measure={playhead?.bar} data-play-beat={playhead?.beat} aria-hidden="true" hidden />}
+    {position && <div ref={cursor} className={'score-cursor' + (playhead ? paused ? ' is-paused' : ' is-playing' : '')} data-play-measure={playhead?.bar} data-play-beat={playhead?.beat}
+      data-extension={(playhead ?? position).extension} aria-hidden="true" hidden />}
   </div>
 }

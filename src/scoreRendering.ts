@@ -1,5 +1,5 @@
 import { Environment, rendering, type AlphaTabApi, type model, type platform } from '@coderline/alphatab'
-import type { GraceSide, IntroRange } from './model'
+import { numberedExtensionTicks, type GraceSide, type IntroRange } from './model'
 
 // This adapter is for the renderer objects in the pinned alphaTab version.
 type Glyph = {
@@ -19,7 +19,7 @@ type NoteGlyph = BeatGlyph & {
   buildBoundingsLookup(bounds: rendering.BeatBounds, cx: number, cy: number): void
 }
 type NumberedHead = Glyph & { height: number; _octaveDots: number; _octaveDotsY: number }
-type BeatContainer = { beat?: model.Beat; preNotes?: BeatGlyph & { skipLayout: boolean }; onNotes?: NoteGlyph; barCount?: number }
+type BeatContainer = Pick<Glyph, 'paint'> & { beat?: model.Beat; preNotes?: BeatGlyph & { skipLayout: boolean }; onNotes?: NoteGlyph; barCount?: number; absoluteDisplayStart?: number }
 type NumberedBeam = { beats: model.Beat[]; isRestBeamHelper: boolean }
 type BarRenderer = {
   width: number
@@ -353,8 +353,22 @@ function patchNumberedNotation(result: BarRenderer) {
   const shouldPaint = result.shouldPaintBeamingHelper.bind(result)
   result.shouldPaintBeamingHelper = (helper) => !helper.isRestBeamHelper && shouldPaint(helper)
   const add = result.addBeatGlyph.bind(result)
+  let main: model.Beat | undefined
   result.addBeatGlyph = (container) => {
     const { beat, preNotes, onNotes, barCount } = container
+    if (beat && barCount === undefined) main = beat
+    if (!beat && main && container.absoluteDisplayStart !== undefined) {
+      const offset = (container.absoluteDisplayStart - main.absoluteDisplayStart) / numberedExtensionTicks
+      if (Number.isInteger(offset) && offset > 0) {
+        const name = 'xianpu-extension-' + main.id + '-' + offset
+        const paint = container.paint.bind(container)
+        container.paint = (cx, cy, canvas) => {
+          canvas.beginGroup(name)
+          paint(cx, cy, canvas)
+          canvas.endGroup()
+        }
+      }
+    }
     if (beat && !beat.isEmpty && onNotes) {
       const grace = numberedGrace.get(beat)
       if (grace) paintNumberedGrace(result, beat, onNotes, preNotes, grace)

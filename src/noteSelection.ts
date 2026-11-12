@@ -1,4 +1,4 @@
-import { beatList, blank, capacity, durations, matchingTie, maxGraceNotes, ticks, voiceBars, type Beat, type Position, type Project, type Track } from './model.ts'
+import { beatList, blank, capacity, durations, matchingTie, maxGraceNotes, numberedExtensions, numberedExtensionTicks, shortenedBeat, ticks, voiceBars, type Beat, type Position, type Project, type Track } from './model.ts'
 import { guitarFingering } from './keyChange.ts'
 
 export type RhythmEdit = 'shorten' | 'lengthen' | 'add-extension' | 'remove-extension'
@@ -223,15 +223,19 @@ export function copySelectedNotes(score: Project, targets: SelectedBeat[], track
 
 export function pasteSelectedNotes(score: Project, position: Position, clipboard: NoteClipboard) {
   const track = score.tracks.find(({ id }) => id === position.track)
-  if (!track || !clipboard.beats.length) return { error: 'space' } as const
+  if (!track || !clipboard.beats.length || position.extension) return { error: 'space' } as const
   const bars = voiceBars(track, position.voice)
   const positions: Position[] = []
+  const changes = new Map<number, { first: number; end: number; tail: Beat[]; clipStart: number; clipEnd: number }>()
+  const removed: Replacement[] = []
   for (let bar = position.bar; bar < bars.length && positions.length < clipboard.beats.length; bar++) {
     if (score.measures[bar].simile) return { error: 'space' } as const
     const original = beatList(score, bars[bar], bar)
     const first = bar === position.bar ? position.beat : 0
     const limit = capacity(score, bar)
     let offset = original.slice(0, first).reduce((sum, beat) => sum + ticks(beat), 0)
+    const start = offset
+    const clipStart = positions.length
     if (offset > limit + 1e-7) return { error: 'barline' } as const
     for (let beat = first; beat < 256 && positions.length < clipboard.beats.length; beat++) {
       if (offset >= limit - 1e-7) break
@@ -241,11 +245,31 @@ export function pasteSelectedNotes(score: Project, position: Position, clipboard
       offset = end
     }
     if (positions.length < clipboard.beats.length && offset < limit - 1e-7) return { error: 'space' } as const
+    if (positions.length === clipStart) continue
+    let end = first
+    let covered = start
+    let tail: Beat[] = []
+    while (end < original.length && covered < offset - 1e-7) {
+      const beat = original[end]
+      covered += ticks(beat)
+      removed.push({ position: { ...position, bar, beat: end }, beat: {
+        ...blank(beat.duration), dots: beat.dots, triplet: beat.triplet, tuplet: beat.tuplet, draft: false,
+      } })
+      end++
+      if (covered > offset + 1e-7) {
+        const remainder = shortenedBeat({ ...blank(beat.duration), notes: beat.notes, draft: beat.draft,
+          triplet: beat.triplet, tuplet: beat.tuplet, slur: beat.slur, graceAfter: beat.graceAfter }, covered - offset)
+        if (!remainder) return { error: 'barline' } as const
+        tail = remainder
+      }
+    }
+    if (first + positions.length - clipStart + tail.length + original.length - end > 256) return { error: 'space' } as const
+    changes.set(bar, { first, end, tail, clipStart, clipEnd: positions.length })
   }
   if (positions.length < clipboard.beats.length) return { error: 'space' } as const
 
   const sameTuning = track.tuning.join() === clipboard.tuning.join()
-  const edits: Replacement[] = []
+  const pasted: Beat[] = []
   const tuplets = new Map<string, string>()
   const spanIds = new Map<string, string>()
   for (const [index, beat] of clipboard.beats.entries()) {
@@ -255,24 +279,51 @@ export function pasteSelectedNotes(score: Project, position: Position, clipboard
       ? guitarFingering(beat.notes, track.tuning, true)
       : beat.notes.map(({ midi, bend, slide }) => ({ midi, bend, slide }))
     if (!notes) return { error: 'guitar' } as const
-    edits.push({ position: positions[index], beat: { ...content, notes,
+    pasted.push({ ...content, notes,
       diagram: sameTuning ? beat.diagram : undefined,
       marks: sameTuning ? beat.marks : beat.marks?.filter(({ string }) => string === undefined),
       spans: beat.spans?.map((span) => {
         if (!spanIds.has(span.id)) spanIds.set(span.id, crypto.randomUUID())
         return { ...span, id: spanIds.get(span.id)! }
       }),
-      tie: !!beat.tie && !!edits.at(-1)?.beat.notes.some((tone) => notes.some((note) => matchingTie(tone, note))),
+      tie: !!beat.tie && !!pasted.at(-1)?.notes.some((tone) => notes.some((note) => matchingTie(tone, note))),
       tupletGroup: tupletGroup ? tuplets.get(tupletGroup) : undefined,
-    } })
+    })
   }
-  const last = positions.at(-1)!
-  const prior = position.beat ? { ...position, beat: position.beat - 1 }
-    : { ...position, bar: position.bar - 1, beat: (bars[position.bar - 1]?.length ?? 0) - 1 }
-  const next = bars[last.bar]?.[last.beat + 1] ? { ...last, beat: last.beat + 1 } : { ...last, bar: last.bar + 1, beat: 0 }
-  const before = bars[prior.bar]?.[prior.beat]
-  const after = bars[next.bar]?.[next.beat]
-  if (before?.slur) edits.push({ position: prior, beat: { ...before, slur: false } })
-  if (after?.tie) edits.push({ position: next, beat: { ...after, tie: false } })
-  return { score: replaceBeats(score, edits), positions }
+  const cleaned = replaceBeats(score, removed, true)
+  return { score: updateVoiceBars(cleaned, position, (bars) => bars.map((bar, index) => {
+    const change = changes.get(index)
+    if (!change) return bar
+    const { first, end, tail, clipStart, clipEnd } = change
+    const original = beatList(cleaned, bar, index)
+    const content = [...original.slice(0, first), ...pasted.slice(clipStart, clipEnd), ...tail, ...original.slice(end)]
+    return content.slice(0, content.findLastIndex((beat) => !beat.draft) + 1)
+  })), positions }
+}
+
+function updateVoiceBars(score: Project, position: Position, update: (bars: Beat[][]) => Beat[][]): Project {
+  return { ...score, tracks: score.tracks.map((track) => {
+    if (track.id !== position.track) return track
+    return position.voice ? { ...track, voices: track.voices?.map((voice, index) =>
+      index + 1 === position.voice ? { ...voice, bars: update(voice.bars) } : voice) } : { ...track, bars: update(track.bars) }
+  }) }
+}
+
+export function removeNumberedExtension(score: Project, position: Position) {
+  const target = selectedBeats(score, [position])[0]
+  if (!target || !position.extension || position.extension > numberedExtensions(target.beat)) return score
+  const beat = target.beat
+  const shortened = shortenedBeat({ ...beat, slur: false }, ticks(beat) - numberedExtensionTicks)
+  if (!shortened) return score
+  return updateVoiceBars(score, position, (bars) => bars.map((bar, index) => {
+    if (index === position.bar) {
+      const next = bar[position.beat + 1]
+      return [...bar.slice(0, position.beat), ...shortened, { ...blank(), draft: false },
+        ...(next ? [next.tie ? { ...next, tie: false } : next, ...bar.slice(position.beat + 2)] : [])]
+    }
+    if (index === position.bar + 1 && position.beat === bars[position.bar].length - 1 && bar[0]?.tie) {
+      return [{ ...bar[0], tie: false }, ...bar.slice(1)]
+    }
+    return bar
+  }))
 }

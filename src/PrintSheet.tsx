@@ -1,12 +1,10 @@
 import { useRef } from 'react'
 import { ScoreView } from './ScoreView'
 import { useLanguage } from './i18n'
-import { paperFor, type Project } from './model'
+import { pageSystemLimitFor, paperFor, type Project } from './model'
 import { paperDimensions, paperMargin, pxPerMm } from './paper'
 import { createScoreWatermark } from './scoreWatermark'
 import type { CSSProperties } from 'react'
-
-const labelHeight = 28
 
 export function PrintSheet({ project, part, onReady, onError }: {
   project: Project; part: string | null; onReady: (pages: HTMLElement[]) => void; onError: (error: Error) => void
@@ -18,7 +16,7 @@ export function PrintSheet({ project, part, onReady, onError }: {
   const pages = useRef<HTMLDivElement>(null)
   const instrument = project.tracks.find((track) => track.id === part)
   const layout = instrument?.layout ?? project.layout
-  const limit = layout.systemsPerPage
+  const limit = pageSystemLimitFor(layout)
   function paginate(systemCount: number, firstBars: number[]) {
     if (!source.current || !pages.current) return
     const surface = source.current.querySelector('.at-surface')
@@ -52,14 +50,15 @@ export function PrintSheet({ project, part, onReady, onError }: {
       watermark = createScoreWatermark(project)
       if (watermark) currentPage.append(watermark)
       pages.current!.append(currentPage)
-      occupied = labelHeight * (footer ? 2 : 1)
+      occupied = label.getBoundingClientRect().height + (footer?.getBoundingClientRect().height ?? 0)
       systems = 0
     }
     newPage()
     for (const [index, svg] of fragments.entries()) {
       const system = index >= firstSystem
       const height = svg.height.baseVal.value
-      if (system && systems && (systems >= limit || layout.pageBreaks?.includes(firstBars[index - firstSystem]) || occupied + height > contentHeight)) newPage()
+      if (system && systems && (limit > 0 && systems >= limit ||
+        layout.pageBreaks?.includes(firstBars[index - firstSystem]) || occupied + height > contentHeight)) newPage()
       const copy = svg.cloneNode(true) as SVGSVGElement
       const maxHeight = contentHeight - occupied
       if (height > maxHeight && maxHeight > 30) {

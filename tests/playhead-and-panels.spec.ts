@@ -1,5 +1,105 @@
 import { expect, test } from '@playwright/test'
-import { blank, createProject } from '../src/model'
+import { blank, createProject, parseProject } from '../src/model'
+
+test('Space starts from the selected note, pauses, and resumes without losing the playhead', async ({ page }) => {
+  const score = createProject('song')
+  score.bpm = 100
+  score.tracks = score.tracks.slice(0, 1)
+  score.tracks[0].bars = score.measures.map(() =>
+    [60, 62, 64, 65].map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] })))
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'audition-space.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(score)),
+  })
+  const entry = page.getByRole('region', { name: '小节与录入位置' })
+  const cursor = page.locator('.score-cursor')
+  const toolbar = page.locator('[data-audition]')
+  await page.getByRole('button', { name: '歌词与和弦', exact: true }).click()
+  const lyric = page.getByRole('textbox', { name: '歌词', exact: true })
+  await lyric.fill('A')
+  await lyric.press('End')
+  await lyric.press('Space')
+  await expect(lyric).toHaveValue('A ')
+  await expect(toolbar).toHaveText('▶ 试听')
+
+  await entry.getByRole('button', { name: '简谱位置 2', exact: true }).click()
+  await page.keyboard.press('Space')
+  await expect(cursor).toHaveClass(/is-playing/, { timeout: 20_000 })
+  await expect(cursor).toHaveAttribute('data-play-beat', '1')
+  await expect(cursor).toHaveAttribute('data-play-beat', '2')
+  await page.keyboard.press('Space')
+  await expect(cursor).toHaveClass(/is-paused/)
+  await expect(toolbar).toHaveText('▶ 继续试听')
+  const pausedBeat = await cursor.getAttribute('data-play-beat')
+  expect(Number(pausedBeat)).toBeGreaterThanOrEqual(2)
+  await page.waitForTimeout(650)
+  await expect(cursor).toHaveAttribute('data-play-beat', pausedBeat!)
+
+  await page.keyboard.press('Space')
+  await expect(cursor).toHaveClass(/is-playing/)
+  await expect(cursor).toHaveAttribute('data-play-beat', pausedBeat!)
+  await expect(cursor).toHaveAttribute('data-play-measure', '1')
+  await page.keyboard.press('Space')
+  await expect(toolbar).toHaveText('▶ 继续试听')
+  await entry.getByRole('button', { name: /^第 3 小节，/ }).click()
+  await entry.getByRole('button', { name: '简谱位置 3', exact: true }).click()
+  await page.keyboard.press('Space')
+  await expect(cursor).toHaveClass(/is-playing/)
+  await expect(cursor).toHaveAttribute('data-play-measure', '2')
+  await expect(cursor).toHaveAttribute('data-play-beat', '2')
+  await toolbar.click()
+  await expect(toolbar).toHaveText('▶ 试听')
+})
+
+test('selects an extension dash, follows it in audition, and deletes only its sustain', async ({ page }) => {
+  const score = createProject('song')
+  score.bpm = 150
+  score.tracks = score.tracks.slice(0, 1)
+  score.tracks[0].bars[0] = [
+    { ...blank(2), dots: 1, draft: false, notes: [{ midi: 60 }] },
+    { ...blank(), draft: false, notes: [{ midi: 62 }] },
+  ]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'extension-dash.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(score)),
+  })
+  const dashes = page.locator('.canvas g[class^="xianpu-extension-"] > rect')
+  await expect(dashes).toHaveCount(2)
+  const cursor = page.locator('.score-cursor')
+  const first = (await dashes.first().boundingBox())!
+  const second = (await dashes.last().boundingBox())!
+  await page.mouse.click(first.x + first.width / 2, first.y + first.height / 2)
+  await expect(cursor).toHaveAttribute('data-extension', '1')
+  const selected = (await cursor.boundingBox())!
+  expect(selected.x + selected.width / 2).toBeCloseTo(first.x + first.width / 2, 0)
+  const playedDashes = await cursor.evaluateHandle((marker) => {
+    const positions: Record<string, number> = {}
+    new MutationObserver(() => {
+      const extension = marker.getAttribute('data-extension')
+      if (extension && marker.classList.contains('is-playing')) {
+        const box = marker.getBoundingClientRect()
+        positions[extension] = box.x + box.width / 2
+      }
+    }).observe(marker, { attributes: true, attributeFilter: ['data-extension', 'style', 'class'] })
+    return positions
+  })
+  await page.getByRole('button', { name: '▶ 试听' }).click()
+  await expect(cursor).toHaveClass(/is-playing/, { timeout: 20_000 })
+  await expect.poll(() => playedDashes.evaluate((positions) => positions['2'])).toBeCloseTo(second.x + second.width / 2, 0)
+  await page.getByRole('button', { name: '■ 停止' }).click()
+  await expect(cursor).toHaveAttribute('data-extension', '1')
+  await page.keyboard.press('Delete')
+  await expect(dashes).toHaveCount(1)
+  const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+  expect(parseProject(draft).tracks[0].bars[0].map(({ duration, dots, notes }) => [duration, dots, notes[0]?.midi]))
+    .toEqual([[2, 0, 60], [4, 0, undefined], [4, 0, 62]])
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(dashes).toHaveCount(2)
+  const restored = (await dashes.last().boundingBox())!
+  await page.mouse.click(restored.x + restored.width / 2, restored.y + restored.height / 2, { button: 'right' })
+  await page.getByRole('group', { name: '音符编辑' }).getByRole('button', { name: '去增时线' }).click()
+  await expect(dashes).toHaveCount(1)
+})
 
 test('audition follows beats and repeated measures, scrolling into view without changing the edit selection', async ({ page }) => {
   const score = createProject('ensemble')

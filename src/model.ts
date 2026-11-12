@@ -33,7 +33,7 @@ export type Beat = {
 export type NumberedKeyLayout = { hidden?: boolean; x?: number; y?: number }
 export type ScoreLabelKind = 'key' | 'tempo'
 export const trackGapLimits = [-120, 100] as const
-export type Layout = { mode?: Mode; barsPerLine: number; systemsPerPage: number; paper?: Paper; systemBreaks?: number[]; pageBreaks?: number[]; compressRests?: boolean; printHeader?: string; printFooter?: string; showPageNumbers?: boolean; trackGap?: number; numberedKey?: NumberedKeyLayout; hiddenLabels?: Partial<Record<ScoreLabelKind, number[]>> }
+export type Layout = { mode?: Mode; barsPerLine: number; systemsPerPage: number; pageSystemLimit?: number; paper?: Paper; systemBreaks?: number[]; pageBreaks?: number[]; compressRests?: boolean; printHeader?: string; printFooter?: string; showPageNumbers?: boolean; trackGap?: number; numberedKey?: NumberedKeyLayout; hiddenLabels?: Partial<Record<ScoreLabelKind, number[]>> }
 export type Voice = { staff?: 0 | 1; bars: Beat[][] }
 export type Track = {
   id: string; name: string; kind: Kind; mode: Mode; sound?: number; tuning: number[]; bars: Beat[][]; layout: Layout
@@ -50,7 +50,7 @@ export type Project = {
   tracks: Track[]; layout: Layout
 }
 export const watermarkMaxLength = 80
-export type Position = { track: string; bar: number; beat: number; lane?: 'staff' | 'tab' | 'numbered'; voice?: number; note?: number; string?: number }
+export type Position = { track: string; bar: number; beat: number; lane?: 'staff' | 'tab' | 'numbered'; voice?: number; note?: number; string?: number; extension?: number }
 export const modes = { numbered: '简谱', tab: '吉他六线谱', staff: '五线谱', 'staff-tab': '五线谱＋六线谱', 'staff-numbered': '五线谱＋简谱', piano: '钢琴大谱表', percussion: '打击乐谱' } as const
 export const kinds = { voice: modes.numbered, guitar: modes.tab, instrument: modes.staff } as const
 export const guitarTuning = [64, 59, 55, 50, 45, 40]
@@ -60,6 +60,10 @@ export const keyNames = ['C♭', 'G♭', 'D♭', 'A♭', 'E♭', 'B♭', 'F', 'C
 export const pitchNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B']
 const intervals = [0, 2, 4, 5, 7, 9, 11]
 export const layout = (): Layout => ({ barsPerLine: 4, systemsPerPage: 3 })
+export function pageSystemLimitFor(layout: Layout) {
+  // Older files stored 3 even when the user never set a page limit.
+  return layout.pageSystemLimit ?? (layout.systemsPerPage === 3 ? 0 : layout.systemsPerPage)
+}
 export function shiftedLayout(layout: Layout, index: number, delta: number): Layout {
   const shift = (bars?: number[], first = 1) => bars?.flatMap((bar) =>
     delta < 0 && bar >= index && bar < index - delta ? [] : [bar >= index ? bar + delta : bar]).filter((bar) => bar >= first && bar < 256)
@@ -113,6 +117,35 @@ export const blank = (duration: Duration = 4): Beat => ({ duration, dots: 0, tri
 export function ticks(beat: Beat) {
   const [actual, normal] = beat.tuplet ?? (beat.triplet ? [3, 2] : [1, 1])
   return 3840 / beat.duration * (2 - 1 / 2 ** beat.dots) * normal / actual
+}
+export const numberedExtensionTicks = 960
+export function numberedExtensions(beat: Beat) {
+  if (beat.duration >= 4) return 0
+  return Math.max(0, Math.floor((ticks(beat) + 1e-7) / numberedExtensionTicks) - 1)
+}
+
+// Express a shortened beat using ordinary values, or its existing tuplet ratio.
+export function shortenedBeat(beat: Beat, length: number): Beat[] | undefined {
+  const choices = durations.flatMap((duration) => ([0, 1, 2] as const).flatMap((dots) => {
+    const plain = { ...blank(duration), dots }
+    return beat.tuplet || beat.triplet ? [plain, { ...plain, tuplet: beat.tuplet, triplet: beat.triplet }] : [plain]
+  })).map((item) => ({ item, length: ticks(item) })).sort((a, b) => b.length - a.length)
+  const match = (remaining: number) => choices.find(({ length }) => Math.abs(length - remaining) < 1e-7)
+  const rhythm: Beat[] = []
+  while (length > 1e-7 && rhythm.length < 256) {
+    const choice = match(length) ?? choices.find(({ length: value }) => value <= length + 1e-7)
+    if (!choice) return
+    rhythm.push(choice.item)
+    length -= choice.length
+  }
+  if (Math.abs(length) > 1e-7) return
+  return rhythm.map((value, index) => ({
+    ...(index === 0 ? beat : { ...blank(), notes: beat.notes, tie: !!beat.notes.length }),
+    duration: value.duration, dots: value.dots, triplet: value.triplet, tuplet: value.tuplet,
+    tupletGroup: undefined, draft: beat.draft,
+    slur: index === rhythm.length - 1 ? beat.slur : undefined,
+    graceAfter: index === rhythm.length - 1 ? beat.graceAfter : undefined,
+  }))
 }
 export function measureSettings(score: Project, bar: number) {
   let { meter, key, bpm } = score
@@ -381,7 +414,9 @@ const layoutValid = (value: unknown) => object(value) && number(value.barsPerLin
   (value.numberedKey === undefined || object(value.numberedKey) && flag(value.numberedKey.hidden)
     && (value.numberedKey.x === undefined || number(value.numberedKey.x, -120, 120))
     && (value.numberedKey.y === undefined || number(value.numberedKey.y, -120, 120))) &&
-  number(value.systemsPerPage, 1, 6) && (value.mode === undefined || modeValid(value.mode)) &&
+  number(value.systemsPerPage, 1, 6) &&
+  (value.pageSystemLimit === undefined || number(value.pageSystemLimit, 0, 6)) &&
+  (value.mode === undefined || modeValid(value.mode)) &&
   (value.paper === undefined || validPaper(value.paper)) &&
   flag(value.compressRests) && flag(value.showPageNumbers) &&
   (value.printHeader === undefined || string(value.printHeader, 80)) &&
