@@ -49,7 +49,9 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
   const validTie = !!previousEntry?.notes.some((note) => beat.notes.some((target) => matchingTie(note, target)))
   const current = guitar && mode !== 'numbered' ? beat.notes.find((tone) => tone.string === entry.string) ?? beat.notes[0]
     : beat.notes[position.note ?? 0] ?? beat.notes[0]
-  const addToBeat = mode === 'numbered' && stackNotes
+  const selectedLayer = mode === 'numbered' && beat.notes.length > 1 && position.note !== undefined
+    ? beat.notes[position.note] : undefined
+  const addToBeat = mode === 'numbered' && stackNotes && !selectedLayer
   const octaveOf = (midi: number) => Math.floor((midi + transposition - (staff ? base : tonic(keySignature))) / 12)
   const selectedKey = position.track + '/' + (position.voice ?? 0) + '/' + position.bar + '/' + position.beat
   const previousKey = useRef('')
@@ -87,16 +89,24 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
     if (midi < 0 || midi > 127) { setError('音高超出可记谱范围。'); return }
     if (addToBeat && beat.notes.some((note) => note.midi === midi)) return
     if (addToBeat && beat.notes.length >= 16) { setError('同一拍最多可叠放 16 个音。'); return }
-    let tone: Beat['notes'][number] = { midi }
+    let tone: Beat['notes'][number] = { ...selectedLayer, midi }
     if (guitar) {
       const candidates = track.tuning.map((pitch, index) => ({ string: index + 1, fret: midi - pitch }))
         .filter((candidate) => candidate.fret >= 0 && candidate.fret <= 36)
         .sort((a, b) => a.fret - b.fret)
-      const available = candidates.find(({ string }) => !addToBeat || !beat.notes.some((note) => note.string === string))
+      const available = candidates.find(({ string }) => string === selectedLayer?.string) ?? candidates.find(({ string }) =>
+        !(addToBeat || selectedLayer) || !beat.notes.some((note) => note !== selectedLayer && note.string === string))
       if (!available) { setError('当前定弦无法弹出这个音。'); return }
-      tone = { midi, ...available }
+      tone = { ...tone, ...available }
     }
     setError('')
+    if (selectedLayer) {
+      edit((old) => ({ ...old, notes: old.notes.map((note, index) => index === position.note ? tone : note),
+        marks: tone.string !== selectedLayer.string && selectedLayer.string !== undefined
+          ? old.marks?.map((mark) => mark.string === selectedLayer.string ? { ...mark, string: tone.string } : mark)
+          : old.marks }))
+      return
+    }
     edit((old) => ({ ...old, ...rhythm, draft: false, notes: addToBeat ? [...old.notes, tone] : [tone] }))
     if (!addToBeat) next()
   }
@@ -115,7 +125,10 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
     setFret('')
   }
   function degree(value: number, preserveOctave = false) {
-    if (!value) rest()
+    if (!value) {
+      if (selectedLayer) deleteNotes()
+      else rest()
+    }
     else {
       const octave = preserveOctave && current && !addToBeat ? octaveOf(current.midi) : entry.octave
       putPitch(midiForDegree(value, keySignature, 0, entry.accidental ?? 0) + octave * 12 - transposition)

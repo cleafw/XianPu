@@ -679,6 +679,41 @@ test('copies a continuous note range with unfilled beats and an empty measure in
   await expect(page.getByRole('status')).not.toContainText('超出拍数')
 })
 
+test('numbered input replaces only the clicked chord layer and keeps the shared beat', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  const track = project.tracks[0]
+  track.bars[0] = [
+    { ...blank(8), dots: 1, draft: false, notes: [{ midi: 67 }, { midi: 48 }, { midi: 76 }], lyric: '词' },
+    { ...blank(), draft: false, notes: [{ midi: 65 }] },
+  ]
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'replace-chord-layer.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const layer = page.locator('.canvas g[class^="xianpu-stack-note-"] > text').filter({ hasText: /^1$/ })
+  await expect(layer).toBeVisible()
+  const box = (await layer.boundingBox())!
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  await expect(page.getByText('所选音：C3 · 八度 -1')).toBeVisible()
+  await page.keyboard.press('5')
+  const readBar = async () => {
+    const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+    return parseProject(draft).tracks[0].bars[0]
+  }
+  expect((await readBar())[0]).toEqual({ ...track.bars[0][0], notes: [{ midi: 67 }, { midi: 55 }, { midi: 76 }] })
+  await expect(page.getByText('所选音：G3 · 八度 -1')).toBeVisible()
+  await page.getByRole('button', { name: '同拍叠音', exact: true }).click()
+  await page.keyboard.press('6')
+  expect((await readBar())[0].notes.map(({ midi }) => midi)).toEqual([67, 57, 76])
+  await page.getByRole('button', { name: '录入简谱 2', exact: true }).click()
+  expect((await readBar())[0].notes.map(({ midi }) => midi)).toEqual([67, 62, 76])
+  await page.keyboard.press('0')
+  const bar = await readBar()
+  expect(bar[0]).toEqual({ ...track.bars[0][0], notes: [{ midi: 67 }, { midi: 76 }] })
+  expect(bar[1]).toEqual(track.bars[0][1])
+})
+
 test('keyboard replacement keeps the existing low and high octaves', async ({ page }) => {
   const project = createProject('song')
   project.tracks = project.tracks.slice(0, 1)
