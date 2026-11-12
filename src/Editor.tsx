@@ -15,12 +15,13 @@ type BatchEdit = {
   changePitch: (amount: number) => TextKey | undefined
 }
 
-export function Editor({ score, track, position, mode, beat, edit, deleteNotes, putSpan, removeSpan, putTuplet, next, previous, extendBeat, batch, suspended = false, editDraftRest = false }: {
+export function Editor({ score, track, position, mode, beat, edit, deleteNotes, spanSelection, putSpan, removeSpan, putTuplet, next, previous, extendBeat, batch, suspended = false, editDraftRest = false }: {
   score: Project; track: Track; position: Position; mode: Mode; beat: Beat;
   editDraftRest?: boolean;
   extendBeat: () => boolean;
   deleteNotes: () => void;
   batch?: BatchEdit;
+  spanSelection?: readonly [Position, Position] | null;
   edit: (fn: (b: Beat) => Beat) => void; putSpan: (from: Position, to: Position, span: SpanEnd) => boolean; removeSpan: (id: string) => void; putTuplet: (from: Position, to: Position, ratio?: [number, number]) => boolean; next: () => void; previous: () => void; suspended?: boolean
 }) {
   const { language, t } = useLanguage()
@@ -335,7 +336,7 @@ export function Editor({ score, track, position, mode, beat, edit, deleteNotes, 
           }}>{t('清除这组连音')}</button>
         </div>}
       </ToolPanel>
-      <NotationEditor beat={beat} position={position} measures={score.measures} technique={track.technique ?? (track.kind === 'guitar' ? '吉他' : undefined)} guitarString={guitar ? current?.string : undefined} graceControls={graceControls} edit={edit} putSpan={putSpan} removeSpan={removeSpan} />
+      <NotationEditor beat={beat} position={position} measures={score.measures} technique={track.technique ?? (track.kind === 'guitar' ? '吉他' : undefined)} guitarString={guitar ? current?.string : undefined} graceControls={graceControls} edit={edit} spanSelection={spanSelection} putSpan={putSpan} removeSpan={removeSpan} />
       {error && <p className="inline-error" role="alert">{t(error)}</p>}
     </div>
   </section>

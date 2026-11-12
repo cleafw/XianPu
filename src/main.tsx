@@ -163,6 +163,10 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const canDeleteFromEnd = validMeasureCount && measureCount < measureTotal
   const canDeleteFromSelection = canDeleteFromEnd && deleteStart + measureCount <= measureTotal
   const noteTargets = project ? selectedBeats(project, selectedNotes) : []
+  const spanSelection = noteTargets.length > 1
+    ? noteTargets.every(({ position }) => sameVoice(position, noteTargets[0].position))
+      ? [noteTargets[0].position, noteTargets.at(-1)!.position] as const : null
+    : undefined
   const copyTargets = !project || measureSelection.length ? [] : noteTargets.length ? noteTargets
     : beat.draft ? [] : selectedBeats(project, [position])
   const measureDrag = useMeasureDrag(({ clientX, clientY }, doc) => measureButton(doc.elementFromPoint(clientX, clientY)), selectMeasureRange)
@@ -592,9 +596,10 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
     return true
   }
   function putSpan(from: Position, to: Position, span: SpanEnd) {
-    if (!project || !track || from.track !== to.track || (from.voice ?? 0) !== (to.voice ?? 0) || from.bar === to.bar && from.beat === to.beat) return false
-    const bars = voiceBars(track, from.voice)
-    if ([from, to].some(({ bar, beat }) => !bars[bar] ||
+    const source = project?.tracks.find(({ id }) => id === from.track)
+    if (!project || !source || !sameVoice(from, to) || sameBeat(from, to)) return false
+    const bars = voiceBars(source, from.voice)
+    if ([from, to].some(({ bar, beat }) => !bars[bar] || project.measures[bar].simile ||
       !beatList(project, bars[bar], bar)[beat] || (bars[bar][beat]?.spans?.length ?? 0) >= 32)) return false
     const [first, last] = from.bar < to.bar || from.bar === to.bar && from.beat < to.beat ? [from, to] : [to, from]
     commit((score) => changeBeat(changeBeat(score, first, (beat) => ({
@@ -1143,7 +1148,8 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         {track && <Editor suspended={!!(panel || scoreLabel || confirm || pasteWarning || barMenu)} score={project} track={track} position={position} mode={entryMode} beat={beat} editDraftRest={!!selection.editDraftRest}
           deleteNotes={deleteNotes}
           batch={noteTargets.length ? { beats: noteTargets.map(({ beat }) => beat), changeRhythm: changeSelectedRhythm, changePitch: changeSelectedPitch } : undefined}
-          edit={(edit) => { clearNoteSelection(); commit((score) => changeBeat(score, position, edit)) }} putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} extendBeat={extendBeat} />}
+          edit={(edit) => { clearNoteSelection(); commit((score) => changeBeat(score, position, edit)) }} spanSelection={spanSelection}
+          putSpan={putSpan} removeSpan={removeSpan} putTuplet={putTuplet} next={() => move(1)} previous={() => move(-1)} extendBeat={extendBeat} />}
         </PanelsSuspended.Provider>
         {(panel || scoreLabel || confirm || pasteWarning || barMenu) && <div className="inspector inspector-placeholder" aria-hidden="true" />}
         {track && !(panel || scoreLabel || confirm || pasteWarning || barMenu) && <PanelWidthHandle label={t('调整右侧栏宽度')} side="left"

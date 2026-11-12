@@ -33,9 +33,10 @@ function MarkPalette<T extends string>({ items, view, label, name, symbol, pick,
   </div>
 }
 
-export function NotationEditor({ beat, position, measures, technique, guitarString, graceControls, edit, putSpan, removeSpan }: {
+export function NotationEditor({ beat, position, measures, technique, guitarString, graceControls, edit, spanSelection, putSpan, removeSpan }: {
   beat: Beat; position: Position; measures: Measure[]; technique?: Track['technique']; guitarString?: number; edit: (fn: (old: Beat) => Beat) => void
   putSpan: (start: Position, end: Position, span: SpanEnd) => boolean; removeSpan: (id: string) => void
+  spanSelection?: readonly [Position, Position] | null
   graceControls?: ReactNode
 }) {
   const { language, t } = useLanguage()
@@ -71,9 +72,17 @@ export function NotationEditor({ beat, position, measures, technique, guitarStri
       place: place || defaultMarkPlace(key), dx: 0, dy: 0, string: specificString ? guitarString : undefined }
     edit((old) => ({ ...old, draft: false, marks: [...old.marks ?? [], mark] }))
   }
-  function startSpan(key: SpanEnd['kind']) {
-    setStart({ at: position, span: { id: crypto.randomUUID(), kind: key, end: false,
-      text: key === 'custom' ? rangeText.trim() || undefined : undefined } })
+  const manualStart = spanSelection === undefined ? start : null
+  function addSpan(key: SpanEnd['kind']) {
+    const span: SpanEnd = { id: crypto.randomUUID(), kind: key, end: false,
+      text: key === 'custom' ? rangeText.trim() || undefined : undefined }
+    if (spanSelection === undefined) {
+      setStart({ at: position, span })
+      setInvalidEnd(false)
+    } else if (spanSelection && putSpan(...spanSelection, span)) {
+      setStart(null)
+      setInvalidEnd(false)
+    } else setInvalidEnd(true)
   }
   function patch(id: string, values: Partial<ScoreMark>) {
     edit((old) => ({ ...old, marks: old.marks?.map((mark) => mark.id === id ? { ...mark, ...values } : mark) }))
@@ -134,20 +143,20 @@ export function NotationEditor({ beat, position, measures, technique, guitarStri
     </div>)}
     {view === 'select' ? <label>{t('跨音记号')}<select value={kind} onChange={(event) => setKind(event.target.value as SpanEnd['kind'])}>
       {spanKinds.map((item) => <option key={item} value={item}>{rangeName(item)}</option>)}
-    </select></label> : !start && <div className="mark-span-choices">
+    </select></label> : !manualStart && <div className="mark-span-choices">
       <small>{t('跨音记号')}</small>
       <MarkPalette view={view} label={t('跨音记号')} items={spanKinds} name={rangeName} symbol={(key) => spanSymbols[key]}
-        pick={(key) => { setKind(key); if (key !== 'custom') startSpan(key) }} />
+        pick={(key) => { setKind(key); if (key !== 'custom') addSpan(key) }} />
     </div>}
-    {!start && kind === 'custom' && <label>{name('text')}<input maxLength={120} value={rangeText} onChange={(event) => setRangeText(event.target.value)} /></label>}
-    {(start || view === 'select' || kind === 'custom') && <div className="inline small-gap">{start ? <>
-      <small>{t('起点 · 第 {bar} 小节', { bar: start.at.bar + 1 })} · {rangeName(start.span.kind)}</small>
+    {!manualStart && kind === 'custom' && <label>{name('text')}<input maxLength={120} value={rangeText} onChange={(event) => setRangeText(event.target.value)} /></label>}
+    {(manualStart || view === 'select' || kind === 'custom') && <div className="inline small-gap">{manualStart ? <>
+      <small>{t('起点 · 第 {bar} 小节', { bar: manualStart.at.bar + 1 })} · {rangeName(manualStart.span.kind)}</small>
       <button onClick={() => {
-        if (putSpan(start.at, position, start.span)) { setStart(null); setInvalidEnd(false) }
+        if (putSpan(manualStart.at, position, manualStart.span)) { setStart(null); setInvalidEnd(false) }
         else setInvalidEnd(true)
       }}>{t('在这里结束')}</button>
       <button onClick={() => { setStart(null); setInvalidEnd(false) }}>{t('取消起点')}</button>
-    </> : <button onClick={() => startSpan(kind)}>{t('设置起点')}</button>}</div>}
+    </> : <button onClick={() => addSpan(kind)}>{t(spanSelection === undefined ? '设置起点' : '添加跨音记号')}</button>}</div>}
     {invalidEnd && <small role="alert">{t('请在同一声部选择不同位置作为终点。')}</small>}
     {beat.spans?.map((point) => <div className="notation-mark-item" key={point.id}>
       <span>{rangeName(point.kind)}{point.text ? ' · ' + point.text : ''}</span>

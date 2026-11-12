@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
-import { createProject, parseProject } from '../src/model'
+import { blank, createProject, parseProject } from '../src/model'
 
 test('edits multiple bars from the entry panel and undoes each batch together', async ({ page }) => {
   await page.goto('/')
@@ -337,6 +337,58 @@ test('edits a key directly on the score with either pitch or numbered degrees pr
   await expect(dialog.getByRole('combobox', { name: '调号', exact: true })).toHaveValue('2')
   await dialog.getByRole('button', { name: '从当前谱面隐藏' }).click()
   await expect(page.locator('.canvas [data-score-label-kind=key][data-score-label-bar="0"]')).toHaveCount(0)
+})
+
+test('applies spanning marks directly to the earliest and latest selected notes', async ({ page }) => {
+  const project = createProject('song')
+  project.tracks = project.tracks.slice(0, 1)
+  for (const [bar, pitches] of [[60, 64, 65, 67], [62, 69, 71, 72]].entries()) {
+    project.tracks[0].bars[bar] = pitches.map((midi) => ({ ...blank(), draft: false, notes: [{ midi }] }))
+  }
+  await page.goto('/')
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'span-selection.xianpu', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  })
+  const score = page.getByRole('region', { name: '谱面工作区' })
+  const editor = page.getByRole('region', { name: '录入面板' })
+  const glyph = (digit: number) => score.locator('svg text[style*="dominant-baseline: middle"]')
+    .filter({ hasText: new RegExp('^' + digit + '$') }).first()
+  await expect(glyph(2)).toBeVisible()
+  async function clickDigit(digit: number) {
+    const box = (await glyph(digit).boundingBox())!
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  }
+  await clickDigit(2)
+  await page.keyboard.down('Shift')
+  await clickDigit(3)
+  await page.keyboard.up('Shift')
+  await expect(score.getByText('已选 4 个音符位置')).toBeVisible()
+
+  await editor.getByRole('button', { name: '记号面板', exact: true }).click()
+  const palette = editor.getByRole('group', { name: '跨音记号' })
+  await palette.getByRole('button', { name: '渐强', exact: true }).click()
+  await expect(score.locator('[data-kind=crescendo]')).toBeVisible()
+  await expect(editor.getByRole('button', { name: '在这里结束' })).toHaveCount(0)
+  await editor.getByRole('button', { name: '记号列表', exact: true }).click()
+  await palette.getByRole('button', { name: '渐弱', exact: true }).click()
+  await expect(score.locator('[data-kind=diminuendo]')).toBeVisible()
+  await editor.getByRole('button', { name: '下拉选择', exact: true }).click()
+  await editor.getByRole('combobox', { name: '跨音记号' }).selectOption('custom')
+  await editor.getByRole('textbox', { name: '自定义文字或符号' }).fill('保持')
+  await editor.getByRole('button', { name: '添加跨音记号' }).click()
+
+  const draft = await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)
+  const { bars } = parseProject(draft).tracks[0]
+  const starts = bars[0][1].spans!
+  const ends = bars[1][0].spans!
+  expect(starts.map(({ kind, end }) => [kind, end])).toEqual([['crescendo', false], ['diminuendo', false], ['custom', false]])
+  expect(ends.map(({ id, kind, text }) => [id, kind, text])).toEqual(starts.map(({ id, kind, text }) => [id, kind, text]))
+  expect(ends.every(({ end }) => end)).toBe(true)
+  expect(ends.at(-1)?.text).toBe('保持')
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  const undone = parseProject(await page.evaluate(() => localStorage.getItem('xianpu.recovery.v1')!)).tracks[0].bars
+  expect(undone[0][1].spans).toHaveLength(2)
+  expect(undone[1][0].spans).toHaveLength(2)
 })
 
 test('writes printable marks, a pitched grace note, and a cross-system range', async ({ page }) => {

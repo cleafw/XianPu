@@ -393,6 +393,7 @@ const english = {
   "垂直偏移": "Vertical offset",
   "跨音记号": "Spanning mark",
   "设置起点": "Set start",
+  "添加跨音记号": "Add spanning mark",
   "在这里结束": "End here",
   "取消起点": "Clear start",
   "请在同一声部选择不同位置作为终点。": "Choose a different position in the same part.",
