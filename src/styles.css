@@ -248,12 +248,12 @@ body.tool-popup { height: 100vh; overflow: auto; scrollbar-gutter: stable; backg
 .score-cursor.is-paused { background: #2d7cd733; outline: 1px dashed #235994; }
 .score-cursor, .score-note-highlight { position: absolute; width: 16px; border-radius: 5px; background: #2f9b7660; outline: 1px solid #257963; pointer-events: none; z-index: 2; }
 .rhythm { display: grid; grid-template-columns: repeat(3, 1fr); }
-.print-render-source { position: absolute; left: -10000px; top: 0; width: calc(var(--paper-width) - 2 * var(--paper-margin)); }
+.print-render-source { position: absolute; left: -10000px; top: 0; width: calc(var(--paper-width) - var(--paper-inset-x)); }
 .print-page { position: relative; display: flex; flex-direction: column; min-height: var(--paper-height); padding: var(--paper-margin); background: white; margin-bottom: 12px; box-shadow: 0 1px 5px #18332725; }
 .print-page > svg { display: block; flex-shrink: 0; max-width: 100%; }
 .score-watermark { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 @media print {
   .print-render-source { display: none; }
   .print-page { min-height: 0; margin: 0; padding: 0; box-shadow: none; }
-  .print-page:has(> .score-watermark) { min-height: calc(var(--paper-height) - 2 * var(--paper-margin) - 2px); }
+  .print-page:has(> .score-watermark) { min-height: calc(var(--paper-height) - var(--paper-inset-y) - 2px); }
 }

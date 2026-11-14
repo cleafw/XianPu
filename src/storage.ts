@@ -2,6 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
 
 import { languageOf, type Language, type Translate } from './i18n'
+import { paperMarginValues, type PaperMargins } from './paper'
 
 const projectFilters = (t: Translate) => [{ name: t('叶子弦谱工程'), extensions: ['xianpu'] }]
 export const desktop = isTauri()
@@ -47,8 +48,8 @@ export const savePath = (name: string, t: Translate) => save({ title: t('保存�
 export const pickPdf = (name: string, t: Translate) => save({ title: t('导出 PDF'), filters: [{ name: t('PDF 乐谱'), extensions: ['pdf'] }], defaultPath: fileName(name, t) + '.pdf' })
 export const pickPng = (name: string, t: Translate) => save({ title: t('导出 PNG 图片'), filters: [{ name: t('PNG 图片'), extensions: ['png'] }], defaultPath: fileName(name, t) + '.png' })
 export const pickDirectory = (t: Translate, images = false) => open({ title: t(images ? '选择图片文件夹' : '选择分谱文件夹'), directory: true, multiple: false })
-export const exportPdf = (path: string, replace: boolean, width: number, height: number) =>
-  invoke('export_pdf', { path, replace, width, height })
+export const exportPdf = (path: string, replace: boolean, width: number, height: number, margins: PaperMargins) =>
+  invoke('export_pdf', { path, replace, width, height, margins: paperMarginValues(margins) })
 export async function exportPng(path: string, replace: boolean, png: Blob) {
   const data = Array.from(new Uint8Array(await png.arrayBuffer()))
   await invoke('write_png', { path, replace, data })

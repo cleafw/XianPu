@@ -16,7 +16,7 @@ import { PaperEditor } from './PaperEditor'
 import { SoundEditor } from './SoundEditor'
 import { NavigationEditor, navigationMessage } from './NavigationEditor'
 import { resolveScoreNavigation } from './scoreNavigation'
-import { paperDimensions, paperMargin } from './paper'
+import { marginPresets, marginSides, maxPaperMargin, paperDimensions, paperMargin, paperMarginCss, validPaperMargins, type PaperMargins } from './paper'
 import { beatList, beatRange, blank, changeBeat, changeMeasures, clearMeasureContents, createProject, createTrack, defaultWatermarkStyle, extendNumberedBeat, keyNames, kinds, measureDifference, measureSettings, modes, paperFor, parseProject,
   numberedExtensions, pageSystemLimitFor, pitchNames, techniqueGroups, ticks, trackGapLimits, voiceBars, watermarkLimits, watermarkMaxLength,
   type Beat, type IntroRange, type Kind, type Layout, type Measure, type Mode, type Position, type Project, type ScoreLabelKind, type Track, type WatermarkStyle } from './model'
@@ -52,9 +52,11 @@ const keyChangeErrors: Record<KeyChangeError, TextKey> = {
   'guitar-range': '按当前定弦，吉他无法演奏移调后的部分音符或和弦。',
 }
 
-type PrintJob = { part: string | null; key: number; project: Project }
+type PrintJob = { part: string | null; key: number; project: Project; margins: PaperMargins }
 type ExportMode = 'current' | 'score' | 'parts'
 type ExportFormat = 'pdf' | 'png'
+type MarginMode = keyof typeof marginPresets | 'custom'
+const marginLabels = { top: '上边距（mm）', right: '右边距（mm）', bottom: '下边距（mm）', left: '左边距（mm）' } as const
 const scoreName = (score: Project, part: string | null, t: Translate) => score.tracks.find((track) => track.id === part)?.name ?? t('总谱')
 
 function readRecovery() {
@@ -117,6 +119,11 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   const [exportMode, setExportMode] = useState<ExportMode>('current')
   const [exportFormat, setExportFormat] = useState<ExportFormat>('pdf')
   const [exportParts, setExportParts] = useState<string[]>([])
+  const [marginMode, setMarginMode] = useState<MarginMode>('normal')
+  const [customMargins, setCustomMargins] = useState(() => {
+    const value = String(paperMargin)
+    return { top: value, right: value, bottom: value, left: value }
+  })
   const [busy, setBusy] = useState(false)
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
   const [previewPages, setPreviewPages] = useState(0)
@@ -919,14 +926,23 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
   }
   const previewPart = exportMode === 'score' ? null : exportMode === 'parts' ? exportParts[0] ?? activePart : activePart
   const previewPaper = project ? paperFor(project, previewPart) : undefined
+  const exportTargets = exportMode === 'parts' ? exportParts : [previewPart]
+  const exportMargins = marginMode === 'custom' ? {
+    top: Number(customMargins.top), right: Number(customMargins.right), bottom: Number(customMargins.bottom), left: Number(customMargins.left),
+  } : marginPresets[marginMode]
+  const validExportMargins = (marginMode !== 'custom' || marginSides.every((side) => customMargins[side].trim() !== '')) &&
+    validPaperMargins(exportMargins, paperDimensions(previewPaper)) &&
+    (!project || exportTargets.every((part) => validPaperMargins(exportMargins, paperDimensions(paperFor(project, part)))))
+  const marginKey = marginMode === 'custom' ? marginSides.map((side) => customMargins[side]).join(':') : marginMode
   const printDimensions = printJob ? paperDimensions(paperFor(printJob.project, printJob.part)) : paperDimensions(previewPaper)
+  const printMargins = printJob?.margins ?? exportMargins
   async function exportSelection() {
-    if (!project || busy) return
+    if (!project || busy || !validExportMargins) return
     setError(null)
     const images = exportFormat === 'png'
     if (!storage.desktop && !images) { window.print(); return }
     const batch = exportMode === 'parts'
-    const targets = batch ? exportParts : [previewPart]
+    const targets = exportTargets
     if (!targets.length) { setError(message('请至少选择一份分谱。')); return }
     const folder = batch || (images && previewPages > 1)
     setBusy(true)
@@ -948,7 +964,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
             resolve: (pages) => { clearTimeout(timeout); requestAnimationFrame(() => requestAnimationFrame(() => resolve(pages))) },
             reject: (cause) => { clearTimeout(timeout); reject(cause) },
           }
-          setPrintJob({ project, part: item, key: ++jobId.current })
+          setPrintJob({ project, part: item, key: ++jobId.current, margins: exportMargins })
         })
         await document.fonts.ready
         if (images) {
@@ -965,7 +981,7 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
           }
         } else {
           const { width, height } = paperDimensions(paperFor(project, item))
-          await storage.exportPdf(folder ? destination + '\\' + name + '.pdf' : destination, !folder, width, height)
+          await storage.exportPdf(folder ? destination + '\\' + name + '.pdf' : destination, !folder, width, height, exportMargins)
           completed++
         }
       }
@@ -1505,8 +1521,29 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
       </select></label>
       <label>{t('导出范围')}<select disabled={busy} value={exportMode} onChange={(e) => { setPreviewPages(0); setExportMode(e.target.value as ExportMode) }}>
         <option value="current">{t('当前谱')}</option><option value="score">{t('整份总谱')}</option><option value="parts">{t('批量导出分谱')}</option>
-      </select></label><button className="primary" disabled={busy || !previewPages || (exportMode === 'parts' && !exportParts.length)} onClick={() => void exportSelection()}>
+      </select></label>
+      <label>{t('页边距')}<select value={marginMode} disabled={busy} onChange={(event) => {
+        setPreviewPages(0)
+        setMarginMode(event.target.value as MarginMode)
+      }}>
+        <option value="narrow">{t('窄边距 · 6 mm')}</option>
+        <option value="normal">{t('标准边距 · 12 mm')}</option>
+        <option value="wide">{t('宽边距 · 20 mm')}</option>
+        <option value="custom">{t('自定义边距')}</option>
+      </select></label>
+      <button className="primary" disabled={busy || !previewPages || !validExportMargins || !exportTargets.length} onClick={() => void exportSelection()}>
         {t(busy ? '正在导出…' : '选择保存位置')}</button></div>
+      {marginMode === 'custom' && <div className="field-row">
+        {marginSides.map((side) => <label key={side}>{t(marginLabels[side])}
+          <input type="number" min="0" max={maxPaperMargin} step="any" disabled={busy} value={customMargins[side]}
+            onChange={(event) => {
+              const value = event.target.value
+              setPreviewPages(0)
+              setCustomMargins((current) => ({ ...current, [side]: value }))
+            }} />
+        </label>)}
+      </div>}
+      {!validExportMargins && <p className="inline-error" role="alert">{t('页边距须为 0–100 mm，且每张纸的可用宽高各至少为 40 mm。')}</p>}
       {exportMode === 'parts' && <fieldset><legend>{t('选择需要导出的分谱')}</legend>{project.tracks.map((item) => <label className="checkbox" key={item.id}>
         <input type="checkbox" disabled={busy} checked={exportParts.includes(item.id)} onChange={(e) => {
           const next = e.target.checked ? [...exportParts, item.id] : exportParts.filter((id) => id !== item.id)
@@ -1515,7 +1552,9 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         }} />{item.name}</label>)}</fieldset>}
       {exportFormat === 'png' && <p className="preview-label">{t('每页保存为一张 PNG 图片。')}</p>}
       {error && <p className="inline-error" role="alert">{displayMessage(t, error)}</p>}<div className="preview-label">{t(previewPaper?.size === 'a3' ? 'A3 预览' : previewPaper?.size === 'custom' ? '自定义纸张预览' : 'A4 预览')} · {scoreName(project, previewPart, t)}{exportMode === 'parts' ? t('（预览第一份）') : ''}</div>
-      <div className="preview-scroll"><PrintSheet key={exportMode + ":" + previewPart} project={project} part={previewPart} onReady={(pages) => setPreviewPages(pages.length)} onError={(cause) => setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause))} /></div>
+      {validExportMargins && <div className="preview-scroll"><PrintSheet key={exportMode + ':' + previewPart + ':' + marginKey}
+        project={project} part={previewPart} margins={exportMargins} onReady={(pages) => setPreviewPages(pages.length)}
+        onError={(cause) => setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause))} /></div>}
     </Modal>}
     {panel === 'midi-report' && <Modal title={t('MIDI 导入详情')} close={() => setPanel(null)}>
       <ul>{midiWarnings.map((key) => <li key={key}>{t(key)}</li>)}</ul>
@@ -1525,9 +1564,10 @@ function App({ preference, setPreference }: { preference: LanguagePreference; se
         if (await persist() && pendingConfirmation.current === confirm) { setConfirmation(null); confirm() }
       }}>{t('保存并继续')}</button><button onClick={() => discard(confirm)}>{t('放弃改动')}</button><button onClick={() => setConfirmation(null)}>{t('取消')}</button></div>
     </Modal>}
-    {(printJob || (!storage.desktop && project && panel === 'export' && exportFormat === 'pdf')) && <div className="print-only" aria-hidden="true">
-      <style>{'@page { size: ' + printDimensions.width + 'mm ' + printDimensions.height + 'mm; margin: ' + paperMargin + 'mm; }'}</style>
-      <PrintSheet key={printJob?.key ?? 0} project={printJob?.project ?? project!} part={printJob ? printJob.part : previewPart}
+    {(printJob || (!storage.desktop && project && panel === 'export' && exportFormat === 'pdf' && validExportMargins)) && <div className="print-only" aria-hidden="true">
+      <style>{'@page { size: ' + printDimensions.width + 'mm ' + printDimensions.height + 'mm; margin: ' + paperMarginCss(printMargins) + '; }'}</style>
+      <PrintSheet key={printJob?.key ?? marginKey} project={printJob?.project ?? project!} part={printJob ? printJob.part : previewPart}
+        margins={printMargins}
         onReady={printRendered} onError={(cause) => { afterRender.current?.reject(cause); setError(message('无法为这份乐谱生成打印版面。', undefined, cause.message === '无法为这份乐谱生成打印版面。' ? undefined : cause)) }} />
     </div>}
   </>

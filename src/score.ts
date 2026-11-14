@@ -255,6 +255,7 @@ export function drawScore(element: HTMLElement, project: Project, part: string |
   onReady?: () => void, onError?: (error: Error) => void, print = false) {
   const settings = scoreSettings()
   settings.display.scale = scale
+  if (print) settings.display.padding = [6, 8]
   const { score, tracks } = buildScore(project, part, settings, language)
   const layout = part ? tracks[0].layout : project.layout
   const gap = part ? 0 : project.layout.trackGap ?? settings.display.trackStaffPaddingBetween

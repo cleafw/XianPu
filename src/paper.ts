@@ -1,6 +1,17 @@
 export type Paper = { size: 'a4' | 'a3' } | { size: 'custom'; width: number; height: number }
 
 export const paperMargin = 12
+export type PaperMargins = { top: number; right: number; bottom: number; left: number }
+export const marginSides = ['top', 'right', 'bottom', 'left'] as const
+const uniformMargins = (size: number): PaperMargins => ({ top: size, right: size, bottom: size, left: size })
+export const marginPresets = { narrow: uniformMargins(6), normal: uniformMargins(paperMargin), wide: uniformMargins(20) }
+export const maxPaperMargin = 100
+export const paperMarginValues = (margins: PaperMargins) => marginSides.map((side) => margins[side])
+export const paperMarginCss = (margins: PaperMargins) => paperMarginValues(margins).map((value) => value + 'mm').join(' ')
+export function validPaperMargins(margins: PaperMargins, { width, height }: { width: number; height: number }) {
+  return paperMarginValues(margins).every((value) => Number.isFinite(value) && value >= 0 && value <= maxPaperMargin) &&
+    width - margins.left - margins.right >= 40 && height - margins.top - margins.bottom >= 40
+}
 export const pxPerMm = 96 / 25.4
 export const paperLimits = { minWidth: 80, maxWidth: 600, minHeight: 100, maxHeight: 1000 }
 

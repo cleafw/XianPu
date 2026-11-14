@@ -1,5 +1,62 @@
 import { expect, test } from '@playwright/test'
 import { blank, createProject, parseProject } from '../src/model'
+import { pxPerMm } from '../src/paper'
+
+test('export presets and custom margins control preview, PDF, and PNG geometry', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: '打开弹唱示例' }).click()
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  const preset = dialog.getByRole('combobox', { name: '页边距', exact: true })
+  const sheet = dialog.locator('.print-page').first()
+  const save = dialog.getByRole('button', { name: '选择保存位置' })
+  const geometry = () => sheet.evaluate((paper) => {
+    const style = getComputedStyle(paper)
+    const score = paper.querySelector(':scope > svg')!.getBoundingClientRect()
+    const box = paper.getBoundingClientRect()
+    return {
+      padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(parseFloat),
+      width: score.width, left: score.left - box.left, pageWidth: box.width, pageHeight: box.height,
+    }
+  })
+  await expect(save).toBeEnabled()
+  const standard = await geometry()
+  expect(standard.padding[0]).toBeCloseTo(12 * pxPerMm, 3)
+  await preset.selectOption('wide')
+  await expect(save).toBeEnabled()
+  expect((await geometry()).width).toBeLessThan(standard.width)
+  await preset.selectOption('narrow')
+  await expect(save).toBeEnabled()
+  expect((await geometry()).width).toBeGreaterThan(standard.width)
+
+  await preset.selectOption('custom')
+  const top = dialog.getByRole('spinbutton', { name: '上边距（mm）' })
+  await top.fill('')
+  await expect(save).toBeDisabled()
+  await expect(dialog.getByRole('alert')).toContainText('页边距须为')
+  await top.fill('7')
+  await dialog.getByRole('spinbutton', { name: '右边距（mm）' }).fill('17')
+  await dialog.getByRole('spinbutton', { name: '下边距（mm）' }).fill('23')
+  await dialog.getByRole('spinbutton', { name: '左边距（mm）' }).fill('4')
+  await expect(save).toBeEnabled()
+  const custom = await geometry()
+  for (const [index, value] of [7, 17, 23, 4].entries()) expect(custom.padding[index]).toBeCloseTo(value * pxPerMm, 3)
+  expect(custom.left).toBeCloseTo(4 * pxPerMm, 1)
+  expect(custom.pageWidth).toBeCloseTo(210 * pxPerMm, 1)
+  expect(custom.pageHeight).toBeCloseTo(297 * pxPerMm, 1)
+  expect(await page.locator('.print-only > style').textContent()).toContain('margin: 7mm 17mm 23mm 4mm')
+  const pdf = await page.pdf({ preferCSSPageSize: true })
+  expect(pdf.toString('latin1').match(/\/Type \/Page\b/g)).toHaveLength(1)
+
+  await dialog.getByLabel('导出格式').selectOption('png')
+  const png = await sheet.evaluate(async (paper) => {
+    const { renderPng } = await import('/src/exportImage.ts') as typeof import('../src/exportImage')
+    const blob = await renderPng(paper as HTMLElement)
+    const image = await createImageBitmap(blob)
+    return { width: image.width, height: image.height }
+  })
+  expect(png).toEqual({ width: Math.round(custom.pageWidth * 2), height: Math.round(custom.pageHeight * 2) })
+})
 
 test('fills the available A4 page height by default and keeps explicit system limits', async ({ page }) => {
   const project = createProject('song')
